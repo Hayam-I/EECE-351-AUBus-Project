@@ -1,0 +1,62 @@
+# --- Python basics ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# --- Virtual environments ---
+.venv/
+venv/
+
+# --- Editors/OS cruft ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Packaging / build output (PyInstaller / cx_Freeze, etc.) ---
+build/
+dist/
+*.spec
+*.manifest
+*.dll
+
+# --- Logs & temp ---
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+
+# --- PyQt / Qt ---
+# Keep source .ui and .qrc in Git; ignore generated artifacts & caches
+*_ui.py
+*resources_rc.py
+*.pro.user
+*.qbs.user*
+*.creator.user*
+*.qmlc
+*.jsc
+*.autosave
+.qt/
+
+# --- Data files we can regenerate or don’t want in Git ---
+# (SQLite DBs created locally during dev/tests)
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Reports / working files (optional; keep your final deliverables elsewhere) ---
+/report-output/
+screenshots/
+~$*.pptx
