@@ -70,3 +70,12 @@ Sarah Bayrakdar (sib10@mail.aub.edu)
 
 ---
 
+## More Notes:
+The project uses [pre-commit](https://pre-commit.com/) with **Black**, **Flake8**, and **isort** for consistent, readable Python code.
+
+To enable:
+```bash
+pip install pre-commit black flake8 isort
+pre-commit install
+
+
