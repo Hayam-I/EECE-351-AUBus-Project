@@ -381,9 +381,9 @@ No payload
 - SCHEDULE.SEARCH_REQ
 ```json
 {
-    "when": "2025-10-29T07:45:00+02:00",
-    "direction": "TO_AUB",
-    "area": "Baabda/Hazmieh",
+    "when": "",
+    "direction": "",
+    "area": "",
 }
 ```
 -- SCHEDULE.SEARCH_RES
