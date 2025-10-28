@@ -18,15 +18,15 @@ Each message (except error messages) between the client and the server must be a
         }
     }
 }
-
+//auth is {} for REGISTER/LOGIN; required for all other requests.
 ```
 ## All Message Types:
-- AUTH (REGISTER and LOGIN) 
+- AUTH (REGISTER, LOGIN, and LOGOUT) 
 - PROFILE (SET and GET)
-- SCHEDULE (INSERT)
-- RIDE (REQUEST, DECISION, server BROADCAST and MATCH events)
-- CHAT (PEERINFO)
-- ERROR
+- SCHEDULE (SET, GET, SEARCH)
+- RIDE (REQUEST, ACCEPT, DECLINE, CANCEL, server BROADCAST and MATCH events)
+- RATINGS (SET and GET)
+- CONTROL (PING, PONG)
 
 ## Future features that can be added:
 - AUTH: REFRESH. once a session times out for a user, we can REFRESH authentication instead of making the user log in again. adding a timer on the session will be needed too.
@@ -61,12 +61,9 @@ All messages have REQ and RES unless stated otherwise, as EVT (event)
 - RATING.GET
 - RATING.SET
 
-### 6. Chat:
-- CHAT.SEND
-- CHAT.MESSAGE -> this will follow an EVT structure too (server -> receipient)
-- CHAT.CLOSE
 
-### 6. Error Codes
+
+### 7. Error Codes
 ### A. Transport Error Messages:
 - BAD_REQUEST: "missing required fields"
 in envelope, there is a missing required field, 
@@ -82,6 +79,8 @@ for example, a driver accepts a ride request after that ride request has already
 - RATE_LIMITED: "allowed request rate exceeded"
 - INTERNAL_ERROR: "something went wrong"
 - TIMEOUT: "waiting for server/peer timed out"
+
+### 7. Control:
 - PING: checking if server/client connection is still valid
 - PONG: confirming that server/client connection is valid
 
@@ -107,12 +106,6 @@ for example, a driver accepts a ride request after that ride request has already
 - RATING_INVALID_SCORE: out of range (1-5)
 - RATING_DUPLICATE: rating already sent
 - RATING_RIDE_NOT_COMPLETED: rating a ride that is not completed yet
-
-### F. Chat
-- CHAT_NOT_ALLOWED: peers not matched so chat is not allowed
-- CHAT_PEER_UNREACHABLE: TCP connection fails
-- CHAT_MESSAGE_TOO_LARGE: message (frame) limit exceeded
-- CHAT_SESSION_CLOSED: peer closed chat, no new messages accepted
 
 
 ## Error:
@@ -184,14 +177,10 @@ All error messages from server to client shouldl look like:
 {
     "type":"AUTH.LOGIN_RES",
     "id": "",
-    "auth": 
-    {
-        "token": "<>"
-    },
     "payload":
     {
-        
-        "user": 
+        "token": "<>",
+        "user":
         {
             "user_id":"",
             "username":"",
@@ -263,17 +252,20 @@ All error messages from server to client shouldl look like:
 }
 ```
 
-- AUTH.LOGIN_RES: - HAS TOKEN IN AUTH FIELD!! important bc this will carry on with all the rest of the messages. we only want from authenticated users moving on from here
+- AUTH.LOGIN_RES:
 
 ```json
 {
-        
-       "user_id":"",
+        "token": "",
+        "user": 
+        {
+        "user_id":"",
         "username":"",
         "name":"",
         "area":"",
         "is_driver":"",
         "rating":""
+        }
 
 }
 ```
@@ -349,12 +341,10 @@ No payload
             "day": "", //it is best to have the days entered seperately because what if the window was different but the direction was the same? or a similar situation
             "direction": "",
             "area": "",
-            "seats": "",
             "window": 
             {
                 "start":"",
                 "end": "",
-                "tz": ""
             }
             
         },
@@ -403,9 +393,7 @@ No payload
       {
         "user_id": "",
         "name": "",
-        "rating": 4.9,
-        "seats": 1,
-        "contact": { "ip": "", "p2p_port":  }
+        "rating": ,
       } //as many drivers as the schedule matches.
     ]
   }
@@ -433,7 +421,8 @@ No payload
 {
   
     "request_id": "req_",
-    "passenger": {
+    "passenger": 
+    {
       "user_id": "",
       "name": "",
     },
@@ -473,21 +462,23 @@ No payload
 - RIDE.MATCH_EVT (server to both driver and passanger)
 ```json
 {
-  "payload": {
     "match_id": "match_", //incremental
-    "driver": {
+    "driver": 
+    {
       "user_id": "user_",
       "name": "",
       "contact": { "ip": "", "p2p_port": }
     },
-    "passenger": {
+    "passenger": 
+    {
       "user_id": "user_",
       "name": "",
+      "contact": { "ip": "", "p2p_port": }
     },
     "pickup_time": "",
     "area": ""
-  }
 }
+
 
 ```
 - RIDE.CANCEL_REQ
@@ -508,7 +499,7 @@ No payload
 ```
 
 ### 5. Ratings:
-- RATING.GET_REQ
+- RATING.SET_REQ
 ```json
 {
     "match_id": "match_",
@@ -518,7 +509,7 @@ No payload
 }
 
 ```
-- RATING.GET_RES
+- RATING.SET_RES
 ```json
 {
     "rating_id": "rate_", //also incremental
@@ -527,13 +518,13 @@ No payload
 }
 
 ```
-- RATING.SET_REQ
+- RATING.GET_REQ
 ```json
 {
-    "user_id": "usr_d1"
+    "user_id": "user_"
 }
 ```
-- RATING_RES
+- RATING.GET_RES
 ```json
 {
     "overall_rating":,
@@ -541,44 +532,30 @@ No payload
 }
 ```
 
-### 6. Chat:
-- CHAT.SEND_REQ
-```json
-{
-    "match_id": "match_",
-    "text": "", //text
-    "sent_at": "" //time
-}
-```
+## Complete Flow:
+AUTH.LOGIN_REQ → AUTH.LOGIN_RES (client stores token)
 
-- CHAT.SEND_RES
-```json
-{
-    "delivered": true,
-    "message_id": "msg_" //incremental count too
-}
-```
-- CHAT.MESSAGE_EVT 
-```json
-{
-    "from_user_id": "user_",
-    "match_id": "match_",
-    "text": "",
-    "sent_at": ""
-}
+Passenger → RIDE.REQUEST_REQ → RIDE.REQUEST_RES (status: PENDING)
 
-```
-- CHAT.CLOSE_REQ
-```json
-{
-    "match_id": "match_",
-    "reason": "" //ride is completed for example
-}
-```
-- CHAT.CLOSE_RES
-```json
-{
-    "closed": true,
-    "closed_at": ""
-}
-```
+Server performs internal schedule search → pushes RIDE.BROADCAST_EVT to eligible drivers
+
+First driver → RIDE.ACCEPT_REQ → RIDE.ACCEPT_RES
+
+Server pushes RIDE.MATCH_EVT to both passenger and driver (includes driver contact)
+
+Chat: P2P 
+After ride: RATING.SET_REQ → RATING.SET_RES (client can later query RATING.GET_REQ for aggregate)
+
+
+## Final Notes:
+Envelope id: per-message UUIDv4 for request/response correlation; server generates IDs for events.
+
+Domain IDs (user_id, request_id, match_id, rating_id, message_id): server-assigned, persistent.
+
+Timestamps: ISO-8601, e.g., 2025-10-29T07:45:00.
+
+Days: ["MON","TUE","WED","THU","FRI","SAT","SUN"].
+
+Direction: ["TO_AUB","FROM_AUB"].
+
+Auth: token required for all requests except AUTH.REGISTER_REQ and AUTH.LOGIN_REQ
