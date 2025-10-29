@@ -11,14 +11,13 @@ Each message (except error messages) between the client and the server must be a
         "id": "<UUIDv4>",
         //this is needed for when we have multiple clients sending messages to the server at the same time. the server needs to reply with the correct answer to the correct client.
         //also we chose UUID version 4 because we want the client to randomly generate an id and send it when initiating a convo. If something fails, we will include that id in the error message sent back. the same id value from the client will be echoed back by the server.
-        "auth": { "token": "<JWT token>"} //required for all flows post login
         "payload":
         {
             { } // optional, in case message needs details }
         }
     }
 }
-//auth is {} for REGISTER/LOGIN; required for all other requests.
+
 ```
 ## All Message Types:
 - AUTH (REGISTER, LOGIN, and LOGOUT) 
@@ -29,7 +28,7 @@ Each message (except error messages) between the client and the server must be a
 - CONTROL (PING, PONG)
 
 ## Future features that can be added:
-- AUTH: REFRESH. once a session times out for a user, we can REFRESH authentication instead of making the user log in again. adding a timer on the session will be needed too.
+- AUTH: REFRESH. once a session times out for a user, we can REFRESH authentication instead of making the user log in again. adding a timer on the session will be needed too.also is a security feature for authentication
 - PROFILE: UPDATE. the user can update his/her profile
 - SCHEDULE: UPDATE AND DELETE. user can update his/her schedule or delete it
 
@@ -67,8 +66,6 @@ All messages have REQ and RES unless stated otherwise, as EVT (event)
 ### A. Transport Error Messages:
 - BAD_REQUEST: "missing required fields"
 in envelope, there is a missing required field, 
-- UNAUTHORIZED: "no auth token found"
-message comes from an unauthorized source (auth token is misisng)
 - FORBIDDEN: "action not allowed"
 for example, if a someone who has a driver state is requesting a ride. 
 - NOT_FOUND: "requested entity is missing"
@@ -86,7 +83,6 @@ for example, a driver accepts a ride request after that ride request has already
 
 ### B. AUTH
 - AUTH_INVALID_CREDENTIALS
-- AUTH_TOKEN_INVALID: auth token is broken/fake
 - AUTH_USERNAME_TAKEN
 - AUTH_EMAIL_TAKEN
 
@@ -130,7 +126,6 @@ All error messages from server to client shouldl look like:
 {
     "type":"",
     "id":"",
-    "auth": {},
     "payload":
     {
 
@@ -141,7 +136,6 @@ All error messages from server to client shouldl look like:
 {
     "type":"AUTH.REGISTER_REQ",
     "id": "id",
-    "auth": {},
     "payload":
     {
         "name": "Name of User",
@@ -155,18 +149,15 @@ All error messages from server to client shouldl look like:
 {
     "type":"AUTH.REGISTER_REQ",
     "id":"id",
-    "auth": {},
     "payload":
     {
         "user_id":"user_number", //number is incremental order user_1, user_2...
-        "created_at": "time of creation"
     }
 }
 
 {
     "type":"AUTH.LOGIN_REQ",
     "id": "",
-    "auth": {},
     "payload":
     {
         "username": "",
@@ -179,7 +170,6 @@ All error messages from server to client shouldl look like:
     "id": "",
     "payload":
     {
-        "token": "<>",
         "user":
         {
             "user_id":"",
@@ -197,10 +187,6 @@ All error messages from server to client shouldl look like:
 {
     "type":"AUTH.LOGOUT_REQ",
     "id": "",
-    "auth": 
-    {
-        "token":
-    },
     "payload":
     {
         
@@ -210,7 +196,6 @@ All error messages from server to client shouldl look like:
 {
     "type":"AUTH.LOGOUT_RES",
     "id": "",
-    "auth": {},
     "payload":
     {
         "message": "Logout Succesful",
@@ -238,7 +223,6 @@ All error messages from server to client shouldl look like:
 ```json
 {
         "user_id":"user_",
-        "created_at": "time of creation"
 }
 ```
 
@@ -256,7 +240,6 @@ All error messages from server to client shouldl look like:
 
 ```json
 {
-        "token": "",
         "user": 
         {
         "user_id":"",
@@ -303,7 +286,7 @@ No payload
 - PROFILE.SET_RES
 ```json
 {
-        "updated_at":"" //time
+ //nothing
         
 }
 ```
@@ -357,7 +340,7 @@ No payload
 - SCHEDULE.SET_RES
 ```json
 {
-        "updated_at":"" //time
+//nothing
         
 }
 ```
@@ -533,7 +516,7 @@ No payload
 ```
 
 ## Complete Flow:
-AUTH.LOGIN_REQ → AUTH.LOGIN_RES (client stores token)
+AUTH.LOGIN_REQ → AUTH.LOGIN_RES -> store conn -> user_id in memory
 
 Passenger → RIDE.REQUEST_REQ → RIDE.REQUEST_RES (status: PENDING)
 
@@ -545,6 +528,8 @@ Server pushes RIDE.MATCH_EVT to both passenger and driver (includes driver conta
 
 Chat: P2P 
 After ride: RATING.SET_REQ → RATING.SET_RES (client can later query RATING.GET_REQ for aggregate)
+
+AUTH.LOGOUT_REQ -> socket close
 
 
 ## Final Notes:
@@ -558,4 +543,6 @@ Days: ["MON","TUE","WED","THU","FRI","SAT","SUN"].
 
 Direction: ["TO_AUB","FROM_AUB"].
 
-Auth: token required for all requests except AUTH.REGISTER_REQ and AUTH.LOGIN_REQ
+if a client reconnects, login again (new TCP connection)
+enforce role checks (user_id)
+
