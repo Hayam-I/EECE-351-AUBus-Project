@@ -14,6 +14,7 @@ cursor.execute(
                    email TEXT UNIQUE NOT NULL,
                    is_driver INTEGER DEFAULT 0,
                    area TEXT,
+                   rating_sum INTEGER NOT NULL DEFAULT 0, 
                    rating_avg REAL NOT NULL DEFAULT 0,
                    rating_count INTEGER NOT NULL DEFAULT 0
                )

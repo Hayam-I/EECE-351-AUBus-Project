@@ -17,6 +17,7 @@ import logging
 import socket
 import threading
 import traceback
+import uuid
 
 # ---------------------------
 # Constants and configuration
@@ -25,6 +26,23 @@ import traceback
 ENCODING = "utf-8"           # Encoding for text over sockets
 BACKLOG = 10                 # Max queued connections in listen()
 RECV_BUFSIZE = 4096          # How much to read from socket each recv()
+
+
+#adding section for uuid validation
+def is_valid_uuid4(value: str) -> bool:
+    """
+    Returns True if `value` is a canonical UUIDv4 string (lower/upper case accepted).
+    Accepts only a 36-character hex format with hyphens (the usual str(UUID) form).
+    """
+    if not isinstance(value, str):
+        return False
+    try:
+        u = uuid.UUID(value, version=4)
+    except (ValueError, TypeError):
+        return False
+    # Ensure the textual form matches exactly (normalizes case)
+    return str(u) == value.lower() or str(u) == value.upper() or str(u) == value
+#end of added section
 
 # ---------------------------------------------------------
 # Utility generator to read newline-delimited JSON messages
@@ -74,6 +92,30 @@ def handle_message(msg: dict):
       PING → PONG
       anything else → ERROR
     """
+    #adding this section to check for required fields: type and id, payload is optional for some messages so we cant enforce it.
+    required_fields = ("type", "id")
+    missing = [key for key in required_fields if key not in msg]
+
+    if missing:
+        return {
+            "type": "ERROR",
+            "id": msg.get("id"),  # may be None if missing
+            "payload": {
+                "code": "BAD_REQUEST",
+                "message": f"Missing required field(s): {', '.join(missing)}"
+            }
+        }
+    if not is_valid_uuid4(msg["id"]):
+        return {
+            "type": "ERROR",
+            "id": msg.get("id"),
+            "payload": {
+                "code": "BAD_REQUEST",
+                "message": "Field 'id' must be a valid UUIDv4 string"
+            }
+        }
+        #end of added section
+
     mtype = msg.get("type")
     mid = msg.get("id")
 
