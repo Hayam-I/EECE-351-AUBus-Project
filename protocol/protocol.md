@@ -13,7 +13,7 @@ Each message (except error messages) between the client and the server must be a
         //also we chose UUID version 4 because we want the client to randomly generate an id and send it when initiating a convo. If something fails, we will include that id in the error message sent back. the same id value from the client will be echoed back by the server.
         "payload":
         {
-            { } // optional, in case message needs details }
+            { } // optional, in case message needs details 
         }
     }
 }
@@ -64,7 +64,7 @@ All messages have REQ and RES unless stated otherwise, as EVT (event)
 
 ### 7. Error Codes
 ### A. Transport Error Messages:
-- BAD_REQUEST: "missing required fields"
+- BAD_REQUEST: "missing required fields"/or invalid id format
 in envelope, there is a missing required field, 
 - FORBIDDEN: "action not allowed"
 for example, if a someone who has a driver state is requesting a ride. 
@@ -74,8 +74,10 @@ for example, looking for a schedule that doesnt exist in db
 for example, a driver accepts a ride request after that ride request has already been fulfilled.
 - SERVER_BUSY: "server is temporary overloaded"
 - RATE_LIMITED: "allowed request rate exceeded"
-- INTERNAL_ERROR: "something went wrong"
+- SERVER_ERROR: "internal error"
 - TIMEOUT: "waiting for server/peer timed out"
+- BAD_JSON: incorrect json files, server sets id to null
+- UKNOWN_TYPE: unsupported type of messages
 
 ### 7. Control:
 - PING: checking if server/client connection is still valid
@@ -260,7 +262,7 @@ No payload
 ```json
 {
         "message": "Logout Succesful",
-        "logged_out_at": ""
+        //"logged_out_at": ""
         
 }
 ```
