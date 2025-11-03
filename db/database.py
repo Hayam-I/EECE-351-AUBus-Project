@@ -31,7 +31,7 @@ cursor.execute(
                    vehicle_model TEXT,
                    vehicle_color TEXT,
                    vehicle_plate TEXT,
-                   FOREIGN KEY(user_id) REFERENCES users(user_id),
+                   FOREIGN KEY(user_id) REFERENCES users(user_id)
                )
                """
 )
@@ -75,7 +75,7 @@ cursor.execute(
                    accepted_at TEXT,
                    declined_at TEXT,
                    FOREIGN KEY(user_id) REFERENCES users(user_id),
-                   FOREIGN KEY(driver_id) REFERENCES users(user_id)
+                   FOREIGN KEY(driver_id) REFERENCES users(user_id),
                    UNIQUE(request_id, driver_id)
                )
                """

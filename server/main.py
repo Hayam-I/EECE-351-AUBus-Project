@@ -19,6 +19,10 @@ import threading
 import traceback
 import uuid
 
+import sqlite3
+import re
+from threading import Lock
+
 # ---------------------------
 # Constants and configuration
 # ---------------------------
@@ -27,6 +31,7 @@ ENCODING = "utf-8"           # Encoding for text over sockets
 BACKLOG = 10                 # Max queued connections in listen()
 RECV_BUFSIZE = 4096          # How much to read from socket each recv()
 
+DB_PATH =  "database.db" # Path to SQLite database file
 
 #adding section for uuid validation
 def is_valid_uuid4(value: str) -> bool:
@@ -85,6 +90,50 @@ def send_json(sock: socket.socket, obj: dict):
 # ------------------------------------------------------
 # Main message handler (extend later with real commands)
 # ------------------------------------------------------
+
+#validating registration of new users
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$") #the username can contain letters, numbers, and underscores, and must be between 5 and 20 characters long
+PASSWORD_RE = re.compile(r"^.{6,20}$") #the password must be between 6 and 50 characters long
+EMAIL_RE = re.compile(r"^[^@]+@[^@]+\.[^@]+$") #email must be string@string.string 
+def validate_register_payload(p):
+    missing = [k for k in ("name", "email", "username", "password", "area") if k not in p]
+    if missing:
+        return False, f"Missing fields: {', '.join(missing)}"
+    if not USERNAME_RE.match(p["username"]):
+        return False, "Invalid username (5-20 letters/digists/underscores)"
+    if not PASSWORD_RE.match(p["password"]):
+        return False, "Invalid password (6-20 characters)"
+    if not EMAIL_RE.match(p["email"]):
+        return False, "Invalid email format"
+    if not isinstance(p["area"], str) or not p["area"]:
+        return False, "Area must be a non-empty string"
+    return True, ""
+
+#adding a user into db, making sure username and email and password are valid and username/email are unique 
+def register_user(p):
+    ok, msg = validate_register_payload(p)
+    if not ok:
+        return False, {"code": "BAD_REQUEST", "message": msg}
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO users (username, password, email, is_driver, area) VALUES (?, ?, ?, 0, ?)""", #other not null fileds will be 0 by default (for ratings)
+                (p["username"], p["password"], p["email"], p["area"])
+            )
+        except sqlite3.IntegrityError as e:
+            err = str(e).lower()
+            if "username" in err:
+                return False, {"code": "AUTH_USERNAME_TAKEN", "message": "Username already exists"}
+            if "email" in err:
+                return False, {"code": "AUTH_EMAIL_TAKEN", "message": "Email already exists"}
+            return False, {"code": "SERVER_ERROR", "message": "Database error"}
+        new_user_id = cur.lastrowid
+        return True, {"user_id": f"user_{new_user_id}"}
+    finally:
+        conn.close()
+
 def handle_message(msg: dict):
     """
     Inspect message type and build an appropriate response.
@@ -116,12 +165,23 @@ def handle_message(msg: dict):
         }
         #end of added section
 
+    
     mtype = msg.get("type")
     mid = msg.get("id")
 
     if mtype == "PING":
         # Standard healthy reply
         return {"type": "PONG", "id": mid, "payload": {}}
+    
+    #adding user into db upon registration request, defining the response message
+    if mtype == "AUTH.REGISTER_REQ":
+        p = msg.get("payload", {})
+        ok, result = register_user(p)
+        if ok:
+            return {"type": "AUTH.REGISTER_RES", "id": mid, "payload": result}
+        else:
+            return {"type": "ERROR", "id": mid, "payload": result}
+
 
     # Unknown message type – return a structured error
     return {
@@ -129,6 +189,8 @@ def handle_message(msg: dict):
         "id": mid,
         "payload": {"code": "UNKNOWN_TYPE", "message": f"Unsupported type: {mtype}"},
     }
+
+   
 
 
 # ------------------------------------------
