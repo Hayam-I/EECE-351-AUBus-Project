@@ -35,7 +35,7 @@ DB_PATH =  "database.db" # Path to SQLite database file
 
 
 
-import db.database as db  # adjust import path if needed
+import database.db as db  # adjust import path if needed
 
 # Example in-memory token store (created earlier in login handler)
 SESSION_TOKENS = {}  # token:str -> user_id:int
