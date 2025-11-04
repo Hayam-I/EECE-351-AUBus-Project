@@ -33,6 +33,54 @@ RECV_BUFSIZE = 4096          # How much to read from socket each recv()
 
 DB_PATH =  "database.db" # Path to SQLite database file
 
+
+
+import db.database as db  # adjust import path if needed
+
+# Example in-memory token store (created earlier in login handler)
+SESSION_TOKENS = {}  # token:str -> user_id:int
+
+def handle_profile_set(msg: dict):
+    """
+    Handles PROFILE.SET_REQ: updates user profile fields and returns PROFILE_OK
+    """
+    mid = msg.get("id")
+    auth = msg.get("auth") or {}
+    token = auth.get("token")
+
+    # --- auth check ---
+    if not token or token not in SESSION_TOKENS:
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "AUTH_REQUIRED", "message": "Missing or invalid token"},
+        }
+
+    user_id = SESSION_TOKENS[token]
+    payload = msg.get("payload") or {}
+
+    name = payload.get("name")
+    email = payload.get("email")
+    area = payload.get("area")
+    is_driver = bool(payload.get("is_driver", False))
+
+    # --- update database ---
+    sql = """
+        UPDATE users
+        SET name=?, email=?, area=?, is_driver=?
+        WHERE id=?
+    """
+    db.execute(sql, (name, email, area, int(is_driver), user_id))
+
+    # --- read back stored values for confirmation ---
+    row = db.query_one("SELECT name, email, area, is_driver FROM users WHERE id=?", (user_id,))
+
+    return {"type": "PROFILE_OK", "id": mid, "payload": dict(row)}
+
+
+
+
+
 #adding section for uuid validation
 def is_valid_uuid4(value: str) -> bool:
     """
@@ -172,6 +220,8 @@ def handle_message(msg: dict):
     if mtype == "PING":
         # Standard healthy reply
         return {"type": "PONG", "id": mid, "payload": {}}
+    elif mtype == "PROFILE.SET_REQ":
+        return handle_profile_set(msg)
     
     #adding user into db upon registration request, defining the response message
     if mtype == "AUTH.REGISTER_REQ":
@@ -187,10 +237,10 @@ def handle_message(msg: dict):
     return {
         "type": "ERROR",
         "id": mid,
-        "payload": {"code": "UNKNOWN_TYPE", "message": f"Unsupported type: {mtype}"},
+        "payload": {"code": "UNKNOWN_TYPE", "message": f"Unsupported type: {mtype}"},  
     }
 
-   
+
 
 
 # ------------------------------------------
@@ -286,6 +336,15 @@ def serve(host: str, port: int):
             # Wait briefly for threads to exit (they're daemon so process exits anyway)
             for t in threads:
                 t.join(timeout=0.1)
+
+
+def query_one(sql, params=()):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    row = cur.fetchone()
+    conn.commit()
+    return row
 
 
 # ------------------------------
