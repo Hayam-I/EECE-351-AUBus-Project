@@ -119,9 +119,10 @@ def register_user(p):
         cur = conn.cursor()
         try:
             cur.execute(
-                "INSERT INTO users (username, password, email, is_driver, area) VALUES (?, ?, ?, 0, ?)""", #other not null fileds will be 0 by default (for ratings)
-                (p["username"], p["password"], p["email"], p["area"])
+                "INSERT INTO users (name, username, password, email, is_driver, area) VALUES (?, ?, ?, ?, 0, ?)""", #other not null fileds will be 0 by default (for ratings)
+                (p["name"], p["username"], p["password"], p["email"], p["area"])
             )
+            conn.commit()
         except sqlite3.IntegrityError as e:
             err = str(e).lower()
             if "username" in err:
@@ -133,6 +134,45 @@ def register_user(p):
         return True, {"user_id": f"user_{new_user_id}"}
     finally:
         conn.close()
+
+#to retrieve a user preview from a db row, helper fct for login_user
+def _user_preview_from_row(row):
+    """
+    row = (user_id, name, username, password, email, is_driver, area, rating_sum, rating_avg, rating_count)
+    """
+    return {
+        "user_id": f"user_{row[0]}",
+        "name": row[1],
+        "username": row[2],
+        "email": row[4],
+        "is_driver": bool(row[5]),
+        "area": row[6],
+        "rating_sum": row[7],
+        "rating_avg": float(row[8]) if row[8] is not None else 0.0,
+        "rating_count": row[9],
+    }
+
+def login_user(p):
+    for k in ("username", "password"):
+        if k not in p or not isinstance(p[k], str) or not p[k]:
+            return False, {"code": "BAD_REQUEST", "message": f"Missing/invalid field: {k}"}
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT user_id, name, username, password, email, is_driver, area, rating_sum, rating_avg, rating_count FROM users WHERE username = ?""", (p["username"],))
+        
+        if not row:
+            return False, {"code": "AUTH_INVALID_CREDENTIALS", "message": "Invalid username or password"}
+        row = cur.fetchone()
+        
+        if row[3] != p["password"]:
+            return False, {"code": "AUTH_INVALID_CREDENTIALS", "message": "Invalid username or password"}
+        user_preview = _user_preview_from_row(row)
+        return True, {"user": user_preview}
+    finally:
+        conn.close()
+       
 
 def handle_message(msg: dict):
     """
@@ -181,7 +221,15 @@ def handle_message(msg: dict):
             return {"type": "AUTH.REGISTER_RES", "id": mid, "payload": result}
         else:
             return {"type": "ERROR", "id": mid, "payload": result}
-
+    
+    #handling login requests, defining the response message
+    if mtype == "AUTH.LOGIN_REQ":
+        p = msg.get("payload", {})
+        ok, result = login_user(p)
+        if ok:
+            return {"type": "AUTH.LOGIN_RES", "id": mid, "payload": result}
+        else:
+            return {"type": "ERROR", "id": mid, "payload": result}
 
     # Unknown message type – return a structured error
     return {

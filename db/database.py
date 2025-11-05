@@ -9,6 +9,7 @@ cursor.execute(
     """
                CREATE TABLE users(
                    user_id INTEGER PRIMARY KEY,
+                   name TEXT NOT NULL,
                    username TEXT UNIQUE NOT NULL,
                    password TEXT NOT NULL,
                    email TEXT UNIQUE NOT NULL,
