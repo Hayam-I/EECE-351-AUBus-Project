@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AUBus – Server (Phase 0 + P1-05, NO TOKENS)
+AUBus – Server
 -------------------------------------------
 Transport: TCP + JSON Lines (one connection per client)
 
@@ -9,7 +9,7 @@ Envelope (all messages):
 
 Auth model (per-connection):
   • After AUTH.LOGIN_RES, we bind THIS TCP connection to that user_id.
-  • PROFILE.SET/GET require the connection to be logged in (unless GET specifies a user_id and we allow public lookups — here we keep it "login required" by default).
+  • PROFILE.SET/GET require the connection to be logged in.
 
 Supported:
   CONTROL: PING -> PONG
@@ -128,7 +128,7 @@ def _user_preview_from_row(row):
         "rating_avg": float(row[8]) if row[8] is not None else 0.0,
         "rating_count": row[9],
     }
-
+#fter a successful AUTH.LOGIN_REQ, the server stores user_id in the per-socket state; subsequent messages on that same TCP connection are considered “logged in”.
 def login_user(p: dict):
     for k in ("username", "password"):
         if k not in p or not isinstance(p[k], str) or not p[k]:
@@ -244,7 +244,17 @@ def profile_get(current_user_id: int, payload: dict, mid):
 
 # ---------------------------------------------------------
 # Dispatcher (takes per-connection state)
+# Validates 'type' and 'id'
+    # mtype switch:
+    # - "PING" → PONG
+    # - "AUTH.REGISTER_REQ" → register_user(...)
+    # - "AUTH.LOGIN_REQ"    → login_user(...) and bind conn_state["user_id"]
+    # - "AUTH.LOGOUT_REQ"   → clears conn_state["user_id"]
+    # - "PROFILE.SET_REQ"   → requires login
+    # - "PROFILE.GET_REQ"   → requires login (or explicit user_id payload)
+    # otherwise → ERROR: UNKNOWN_TYPE
 # ---------------------------------------------------------
+
 def handle_message(msg: dict, conn_state: dict):
     if "type" not in msg or "id" not in msg:
         return {"type": "ERROR", "id": msg.get("id"),
