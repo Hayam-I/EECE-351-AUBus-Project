@@ -1,10 +1,19 @@
 import sys
+import json
+import re
+import socket
+import uuid
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget
+    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout, QLineEdit, QMessageBox
 )
 from PyQt5.QtCore import Qt
 
+#configuring client - will work only if server is running on localhost
+HOST = "127.0.0.1"
+PORT = 6000
+SOCKET_TIMEOUT = 4.0 #will only wait 4 seconds for a response from server
+ENCODING = "utf-8"
 
 def title_page(text):
     """Utility function to create a centered title page."""
@@ -18,7 +27,170 @@ def title_page(text):
     v.addStretch(1)
     return w
 
+#verifying client side that username/password/email are of valid format to match up with server/main.py
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$")
+PASSWORD_RE = re.compile(r"^.{6,20}$")
+EMAIL_RE = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 
+#client to server -> create helper function to open socket, connect, encode json, add newline, send, read, split by newline, decode and load json 
+# synchronous request-response model - fine for now (register/login) but for chat we need threading
+def jsonl_request(host, port, obj):
+    data = (json.dumps(obj, separators=(",", ":")) + "\n").encode(ENCODING)
+    with socket.create_connection((host, port), timeout=SOCKET_TIMEOUT) as s:
+        s.settimeout(SOCKET_TIMEOUT)
+        s.sendall(data)
+        buffer = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buffer += chunk
+            if b"\n" in buffer:
+                line, _rest = buffer.split(b"\n", 1)
+                txt = line.decode(ENCODING, errors="replace").rstrip("\r").strip()
+                if not txt:
+                    raise ValueError("Received empty response from server")
+                return json.loads(txt)
+    raise RuntimeError("No response received from server")
+
+class RegisterForm(QWidget):
+    """validate fields then send AUTH.REGISTER_REQ to server"""
+    def __init__(self, parent = None):
+        super().__init__(parent)
+
+        self.in_name = QLineEdit()
+        self.in_email = QLineEdit()
+        self.in_username = QLineEdit()
+        self.in_password = QLineEdit()
+        self.in_password.setEchoMode(QLineEdit.Password)
+        self.in_area = QLineEdit()
+
+        for w in (self.in_name, self.in_email, self.in_username, self.in_password, self.in_area):
+            w.setMinimumWidth(250)
+            w.setMaximumWidth(400)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setFormAlignment(Qt.AlignHCenter | Qt.AlignCenter)
+        form.setContentsMargins(0,20,0,0)
+        form.setHorizontalSpacing(15)
+        form.setVerticalSpacing(10)
+
+        form.addRow("Name:", self.in_name)
+        form.addRow("Email:", self.in_email)  
+        form.addRow("Username:", self.in_username)
+        form.addRow("Password:", self.in_password)
+        form.addRow("Area:", self.in_area)
+
+        self.err = QLabel("")
+        self.err.setWordWrap(True)
+        self.err.setStyleSheet("color: red;")
+        self.err.setVisible(False)
+
+        self.btn_register = QPushButton("Create account")
+        self.btn_register.setMinimumWidth(120)
+        self.btn_register.clicked.connect(self.on_submit)
+
+        card = QWidget()
+        card.setObjectName("register_card")
+        card.setStyleSheet("""
+            QWidget#register_card {
+                background: #ffffff;
+                border: 1px solid #e5e5e5;
+                border-radius: 12px;
+            }
+            QLineEdit {
+                padding: 8px 10px;
+                border: 1px solid #d0d0d0;
+                border-radius: 6px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #7aa7ff;
+                outline: none;
+            }
+            
+        """)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(30, 20, 30, 20)
+        card_layout.setSpacing(15)
+        card_layout.addLayout(form)
+        card_layout.addWidget(self.err)
+        card_layout.addSpacing(8)
+        card_layout.addWidget(self.btn_register,0, Qt.AlignHCenter)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0,0,0,0)
+        root.addStretch(1)
+        root.addWidget(card, 0, Qt.AlignHCenter)
+        root.addStretch(1)
+    
+    def show_error(self, message):
+        self.err.setText(message)
+        self.err.setVisible(True)
+    
+    def clear_error(self):
+        self.err.setText("")
+        self.err.setVisible(False)
+    
+    def validate(self):
+        name = self.in_name.text().strip()
+        email = self.in_email.text().strip()
+        username = self.in_username.text().strip()
+        password = self.in_password.text().strip()
+        area = self.in_area.text().strip()
+
+        if not name:
+            return False, "Name is required."
+        if not email or not EMAIL_RE.match(email):
+            return False, "Invalid email format."
+        if not username or not USERNAME_RE.match(username):
+            return False, "Username must be 5-20 characters (letters, digits, underscores)."
+        if not password or not PASSWORD_RE.match(password):
+            return False, "Password must be 6-20 characters."
+        if not area:
+            return False, "Area is required."
+        
+        return True, {
+            "name": name,
+            "email": email,
+            "username": username,
+            "password": password,
+            "area": area
+        }
+    
+    def on_submit(self):
+        self.clear_error()
+        ok, payload_or_msg = self.validate()
+        if not ok:
+            self.show_error(payload_or_msg)
+            return
+        req = {
+            "type": "AUTH.REGISTER_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": payload_or_msg
+        }
+        try:
+            resp = jsonl_request(HOST, PORT, req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+        rtype = resp.get("type")
+        payload = resp.get("payload", {})
+        if rtype == "AUTH.REGISTER_RES":
+            QMessageBox.information(self, "Success", "Account created successfully! You can now log in.")
+            self.in_name.clear()
+            self.in_email.clear()
+            self.in_username.clear()
+            self.in_password.clear()
+            self.in_area.clear()
+
+        elif rtype == "ERROR":
+            msg = payload.get("message", "Unknown error")
+            self.show_error(f"Error: {msg}")
+        
+        else:
+            self.show_error(f"Unexpected response from server. {rtype}")
+        
 class RidePage(QWidget):
     """Ride page with sub-navigation: Overview | Chat | Ratings"""
     def __init__(self):
@@ -76,7 +248,7 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         tabs.addTab(title_page("Login Here"), "Login")
-        tabs.addTab(title_page("Register Here"), "Register")
+        tabs.addTab(RegisterForm(), "Register")
 
         continue_btn = QPushButton("Continue")
         continue_btn.clicked.connect(self.goto_app)

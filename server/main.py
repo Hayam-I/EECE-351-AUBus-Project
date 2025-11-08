@@ -15,6 +15,8 @@ Supported:
   CONTROL: PING -> PONG
   AUTH:    REGISTER_REQ/RES, LOGIN_REQ/RES, LOGOUT_REQ/RES
   PROFILE: SET_REQ/RES, GET_REQ/RES
+  
+N.B TO SELF: password is plaintext, consider TLS, later not rn
 """
 
 import argparse
