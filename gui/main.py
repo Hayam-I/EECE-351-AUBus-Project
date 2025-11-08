@@ -65,12 +65,22 @@ class RegisterForm(QWidget):
         self.in_password.setEchoMode(QLineEdit.Password)
         self.in_area = QLineEdit()
 
+        for w in (self.in_name, self.in_email, self.in_username, self.in_password, self.in_area):
+            w.setMinimumWidth(250)
+            w.setMaximumWidth(400)
+
         form = QFormLayout()
-        form.addRow("Name*", self.in_name)
-        form.addRow("Email*", self.in_email)  
-        form.addRow("Username*", self.in_username)
-        form.addRow("Password*", self.in_password)
-        form.addRow("Area*", self.in_area)
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setFormAlignment(Qt.AlignHCenter | Qt.AlignCenter)
+        form.setContentsMargins(0,20,0,0)
+        form.setHorizontalSpacing(15)
+        form.setVerticalSpacing(10)
+
+        form.addRow("Name:", self.in_name)
+        form.addRow("Email:", self.in_email)  
+        form.addRow("Username:", self.in_username)
+        form.addRow("Password:", self.in_password)
+        form.addRow("Area:", self.in_area)
 
         self.err = QLabel("")
         self.err.setWordWrap(True)
@@ -78,13 +88,41 @@ class RegisterForm(QWidget):
         self.err.setVisible(False)
 
         self.btn_register = QPushButton("Create account")
+        self.btn_register.setMinimumWidth(120)
         self.btn_register.clicked.connect(self.on_submit)
 
+        card = QWidget()
+        card.setObjectName("register_card")
+        card.setStyleSheet("""
+            QWidget#register_card {
+                background: #ffffff;
+                border: 1px solid #e5e5e5;
+                border-radius: 12px;
+            }
+            QLineEdit {
+                padding: 8px 10px;
+                border: 1px solid #d0d0d0;
+                border-radius: 6px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #7aa7ff;
+                outline: none;
+            }
+            
+        """)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(30, 20, 30, 20)
+        card_layout.setSpacing(15)
+        card_layout.addLayout(form)
+        card_layout.addWidget(self.err)
+        card_layout.addSpacing(8)
+        card_layout.addWidget(self.btn_register,0, Qt.AlignHCenter)
+
         root = QVBoxLayout(self)
-        root.addLayout(form)
-        root.addWidget(self.err)
+        root.setContentsMargins(0,0,0,0)
         root.addStretch(1)
-        root.addWidget(self.btn_register,0, Qt.AlignRight)
+        root.addWidget(card, 0, Qt.AlignHCenter)
+        root.addStretch(1)
     
     def show_error(self, message):
         self.err.setText(message)
