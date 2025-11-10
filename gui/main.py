@@ -11,7 +11,11 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal
 
 """IMPORTANT!!!!!!!!!
-Your jsonl_request() opens a new socket per request. That’s fine for REGISTER/LOGIN, but because your server uses connection-bound login (no tokens), anything like PROFILE.* must be sent over the same TCP connection you logged in on. When you implement Profile editing, create a small persistent session object and reuse it for those requests."""
+Your jsonl_request() opens a new socket per request. That’s fine for REGISTER/LOGIN, but because your server uses connection-bound login (no tokens), anything like PROFILE.* must be sent over the same TCP connection you logged in on. When you implement Profile editing, create a small persistent session object and reuse it for those requests.
+
+hayam: will do it for schedule page, profile page should be similar
+server uses connection-bound login (no tokens), any endpoint that “requires being logged in” — including SCHEDULE.* and your “Driver Mode ON” check — must be called on the same TCP socket that performed AUTH.LOGIN_REQ. So you should keep a small persistent client session (one socket you reuse after login). Otherwise you’d have to re-login on every new socket.
+"""
 
 
 #for errors to show instead of crashing window

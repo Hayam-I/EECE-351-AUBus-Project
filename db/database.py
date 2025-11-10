@@ -39,15 +39,16 @@ cursor.execute(
 
 cursor.execute(
     """
-               CREATE TABLE schedules(
-                   sched_id INTEGER PRIMARY KEY,
-                   user_id INTEGER NOT NULL,
-                   day TEXT NOT NULL,
-                   direction TEXT NOT NULL,
-                   area TEXT NOT NULL,
-                   departure_time TEXT NOT NULL,
-                   FOREIGN KEY(user_id) REFERENCES users(user_id)
-               )
+               CREATE TABLE IF NOT EXISTS schedules (
+                schedule_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       INTEGER NOT NULL,
+                weekday       INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+                depart_time   TEXT    NOT NULL, -- 'HH:MM' 24h, validate in code
+                direction     TEXT    NOT NULL CHECK(direction IN ('to_AUB','from_AUB')),
+                area          TEXT    NOT NULL,
+                created_at    TEXT    DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                )
                """
 )
 
