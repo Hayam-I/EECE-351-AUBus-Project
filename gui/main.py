@@ -402,7 +402,7 @@ class MainWindow(QMainWindow):
         self.login_tab.logged_in.connect(self.after_login)
 
     def set_schedule_enabled(self, on: bool):
-        # P1-06 requirement: enable/disable Schedule based on Driver Mode
+        # requirement: enable/disable Schedule based on Driver Mode
         self.btn_sched.setEnabled(bool(on))
 
     def after_login(self, user_preview: dict):
