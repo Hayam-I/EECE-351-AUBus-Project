@@ -233,7 +233,7 @@ class LoginForm(QWidget):
             self.show_error(f"Unexpected response: {rtype}")
 
 # =============================================================================
-# ProfileScreen – editable fields + Driver Mode toggle + Save
+# ProfileScreen – editable fields + Driver Mode toggle + Save + Edit + Cancel (added last two)
 # =============================================================================
 class ProfileScreen(QWidget):
     driverModeChanged = pyqtSignal(bool)  # emit after successful save
@@ -241,17 +241,25 @@ class ProfileScreen(QWidget):
     def __init__(self, session: JsonlSession, user_preview: dict, parent=None):
         super().__init__(parent)
         self.session = session
+
+        self.snapshot = {
+            "name": user_preview.get("name", ""),
+            "email": user_preview.get("email", ""),
+            "area": user_preview.get("area", ""),
+            "is_driver": bool(user_preview.get("is_driver", False))
+        }
+
         # initial values from login
-        self.init_user = user_preview or {}
-        self.current_is_driver = bool(self.init_user.get("is_driver", False))
-        self.current_area = self.init_user.get("area") or ""
+        # self.init_user = user_preview or {}
+        # self.current_is_driver = bool(self.init_user.get("is_driver", False))
+        # self.current_area = self.init_user.get("area") or ""
 
         # UI fields (keep minimal for P1-06)
-        self.in_name = QLineEdit(self.init_user.get("name",""))
-        self.in_email = QLineEdit(self.init_user.get("email",""))  # may be empty in preview
-        self.in_area = QLineEdit(self.current_area)
+        self.in_name = QLineEdit(self.snapshot["name"])
+        self.in_email = QLineEdit(self.snapshot["email"])
+        self.in_area = QLineEdit(self.snapshot["area"])
         self.chk_driver = QCheckBox("Driver Mode")
-        self.chk_driver.setChecked(self.current_is_driver)
+        self.chk_driver.setChecked(self.snapshot["is_driver"])
 
         for w in (self.in_name, self.in_email, self.in_area):
             w.setMinimumWidth(300); w.setMaximumWidth(420)
@@ -268,8 +276,13 @@ class ProfileScreen(QWidget):
         self.err = QLabel(""); self.err.setWordWrap(True); self.err.setStyleSheet("color: red;"); self.err.setVisible(False)
         self.ok = QLabel(""); self.ok.setWordWrap(True); self.ok.setStyleSheet("color: #0a7a0a;"); self.ok.setVisible(False)
 
+        self.btn_edit = QPushButton("Edit")
         self.btn_save = QPushButton("Save")
+        self.btn_cancel = QPushButton("Cancel")
+
+        self.btn_edit.clicked.connect(self.on_edit)
         self.btn_save.clicked.connect(self.on_save)
+        self.btn_cancel.clicked.connect(self.on_cancel)
 
         root = QVBoxLayout(self)
         root.addSpacing(10)
@@ -277,47 +290,115 @@ class ProfileScreen(QWidget):
         root.addWidget(self.err)
         root.addWidget(self.ok)
         root.addSpacing(8)
-        root.addWidget(self.btn_save, 0, Qt.AlignLeft)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.btn_edit)
+        buttons.addWidget(self.btn_save)
+        buttons.addWidget(self.btn_cancel)
+        root.addLayout(buttons)
         root.addStretch(1)
+
+        self.set_edit_mode(False)
+
+    def set_edit_mode(self, on: bool):
+        #read only vs edit mode
+        editing = bool(on)
+        for w in (self.in_name, self.in_email, self.in_area):
+            w.setReadOnly(not editing)
+        self.chk_driver.setEnabled(editing)
+        
+        self.btn_edit.setEnabled(not editing)
+        self.btn_save.setEnabled(editing)
+        self.btn_cancel.setEnabled(editing)
+        
+        self.setStyleSheet("QLineEdit:read-only { background: #f6f6f6; }")
+
+
+    def reset_fields_from_snapshot(self):
+        self.in_name.setText(self.snapshot["name"])
+        self.in_email.setText(self.snapshot["email"])
+        self.in_area.setText(self.snapshot["area"])
+        self.chk_driver.setChecked(self.snapshot["is_driver"])
 
     def show_error(self, msg): self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
     def show_ok(self, msg): self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
 
-    def on_save(self):
+    # def on_save(self):
         # minimal client-side validate
-        name = self.in_name.text().strip()
-        email = self.in_email.text().strip()
-        area = self.in_area.text().strip()
-        is_driver = self.chk_driver.isChecked()
-        if not area:
-            self.show_error("Area is required."); return
+        # name = self.in_name.text().strip()
+        # email = self.in_email.text().strip()
+        # area = self.in_area.text().strip()
+        # is_driver = self.chk_driver.isChecked()
+        # if not area:
+        #     self.show_error("Area is required."); return
 
-        req = {
-            "type": "PROFILE.SET_REQ",
-            "id": str(uuid.uuid4()),
-            "payload": {
-                "is_driver": bool(is_driver),
-                "area": area,
-                # vehicle is optional in v1
-                # "vehicle": {...}
-                "name": name,     # server currently stores name/email on users table
-                "email": email
-            }
+        # req = {
+        #     "type": "PROFILE.SET_REQ",
+        #     "id": str(uuid.uuid4()),
+        #     "payload": {
+        #         "is_driver": bool(is_driver),
+        #         "area": area,
+        #         # vehicle is optional in v1
+        #         # "vehicle": {...}
+        #         "name": name,     # server currently stores name/email on users table
+        #         "email": email
+        #     }
+        # }
+        # try:
+        #     resp = self.session.request(req)
+        # except Exception as e:
+        #     self.show_error(f"Network error: {e}")
+        #     return
+
+        # if resp.get("type") == "PROFILE.SET_RES":
+        #     self.show_ok("Profile saved.")
+        #     # notify parent to enable/disable Schedule
+        #     self.driverModeChanged.emit(is_driver)
+        # elif resp.get("type") == "ERROR":
+        #     self.show_error(resp.get("payload", {}).get("message", "Error saving profile"))
+        # else:
+        #     self.show_error(f"Unexpected response: {resp.get('type')}")
+
+
+    def on_edit(self):
+        self.reset_fields_from_snapshot()
+        self.set_edit_mode(True)
+    
+    def on_cancel(self):
+        self.reset_fields_from_snapshot()
+        self.set_edit_mode(False)
+
+    def on_save(self):
+        area = self.in_area.text().strip()
+        if not area: 
+            self.show_error("Area is required")
+            return
+        
+        payload = {
+            "name": self.in_name.text().strip(),
+            "email": self.in_email.text().strip(),
+            "area": area,
+            "is_driver": bool(self.chk_driver.isChecked())
         }
+        req = {"type":"PROFILE.SET_REQ", "id": str(uuid.uuid4()), "payload": payload}
         try:
             resp = self.session.request(req)
         except Exception as e:
             self.show_error(f"Network error: {e}")
             return
-
         if resp.get("type") == "PROFILE.SET_RES":
+            prev_driver = self.snapshot["is_driver"]
+            self.snapshot.update(payload)
+            self.set_edit_mode(False)
             self.show_ok("Profile saved.")
-            # notify parent to enable/disable Schedule
-            self.driverModeChanged.emit(is_driver)
+            if prev_driver != self.snapshot["is_driver"]:
+                self.driverModeChanged.emit(self.snapshot["is_driver"])
         elif resp.get("type") == "ERROR":
-            self.show_error(resp.get("payload", {}).get("message", "Error saving profile"))
+            self.show_error(resp.get("payload", {})).get("message", "Failed to save profile.")
         else:
             self.show_error(f"Unexpected response: {resp.get('type')}")
+                
+
+    
 
 # =============================================================================
 # Ride placeholder
