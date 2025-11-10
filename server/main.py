@@ -68,11 +68,13 @@ def send_json(sock: socket.socket, obj: dict):
     sock.sendall(data)
 
 # ---------------------------------------------------------
-# Validation helpers (registration/login)
+# Validation helpers (registration/login/schedule)
 # ---------------------------------------------------------
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$")
 PASSWORD_RE = re.compile(r"^.{6,20}$")
 EMAIL_RE    = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
+
+TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")  # HH:MM 24h
 
 def validate_register_payload(p: dict):
     missing = [k for k in ("name", "email", "username", "password", "area") if k not in p]
@@ -87,6 +89,50 @@ def validate_register_payload(p: dict):
     if not isinstance(p["area"], str) or not p["area"]:
         return False, "Area must be a non-empty string"
     return True, ""
+
+def validate_schedule_payload(p):
+    missing = [k for k in ("weekday", "depart_time", "direction", "area") if k not in p]
+    if missing:
+        return False, f"Missing fields: {', '.join(missing)}"
+    wd = p["weekday"]
+    if not isinstance(wd, int) or not (0 <= wd <= 6):
+        return False, "weekday must be int in 0..6"
+    if not isinstance(p["area"], str) or not p["area"]:
+        return False, "area must be a non-empty string"
+    # FIX: the original had TIME_RE.match(p["depart_time"], str) which is invalid
+    if not isinstance(p["depart_time"], str) or not TIME_RE.match(p["depart_time"]):
+        return False, "depart_time must be 'HH:MM' (24h)"
+    # Consistency: choose ONE vocabulary and keep it everywhere (DB/validators/clients)
+    if p["direction"] not in ("to_AUB", "from_AUB"):
+        return False, "direction must be 'to_AUB' or 'from_AUB'"
+    return True, ""
+
+
+def require_logged_in(conn_state, mid):
+    uid = conn_state.get("user_id")
+    if not uid:
+        return None, {"type": "ERROR", "id": mid,
+                      "payload": {"code": "FORBIDDEN", "message": "Login required"}}
+    return uid, None
+
+def require_driver(conn_state, mid):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur  = conn.cursor()
+        cur.execute("SELECT is_driver FROM users WHERE user_id=?", (conn_state.get("user_id"),))
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None, {"type": "ERROR", "id": mid,
+                          "payload": {"code": "NOT_FOUND", "message": "User not found."}}
+        if int(row[0]) != 1:
+            return None, {"type": "ERROR", "id": mid,
+                          "payload": {"code": "FORBIDDEN", "message": "Driver mode must be on."}}
+        return True, None
+    except Exception:
+        logging.exception("require_driver failed")
+        return None, {"type": "ERROR", "id": mid,
+                      "payload": {"code": "SERVER_ERROR", "message": "Internal error"}}
 
 # ---------------------------------------------------------
 # DB utilities
@@ -158,52 +204,73 @@ def profile_set(user_id: int, payload: dict, mid):
         return {"type": "ERROR", "id": mid, "payload": {"code": "FORBIDDEN", "message": "Login required"}}
 
     p = payload or {}
-    # Allowed top-level fields (all optional except area here)
     name      = p.get("name")
     email     = p.get("email")
-    area      = p.get("area")
+    area_in   = p.get("area")              # may be None on partial update
     is_driver = 1 if p.get("is_driver") else 0
     vehicle   = p.get("vehicle") or {}
-
     v_make  = vehicle.get("make")
     v_model = vehicle.get("model")
     v_color = vehicle.get("color")
     v_plate = vehicle.get("plate")
 
-    if not isinstance(area, str) or not area:
-        return {"type": "ERROR", "id": mid, "payload": {"code": "PROFILE_AREA_REQUIRED", "message": "area is required"}}
-
     try:
         conn = sqlite3.connect(DB_PATH)
         cur  = conn.cursor()
 
-        # Update main user record (COALESCE preserves existing when None)
-        cur.execute(
-            "UPDATE users SET name=COALESCE(?,name), email=COALESCE(?,email), area=?, is_driver=? WHERE user_id=?",
-            (name, email, area, is_driver, user_id),
-        )
+        # Do we already have a profile?
+        cur.execute("SELECT user_id, area FROM profiles WHERE user_id=?", (user_id,))
+        prof = cur.fetchone()
 
-        # Upsert into profiles table
-        cur.execute("SELECT 1 FROM profiles WHERE user_id=?", (user_id,))
-        if cur.fetchone():
+        # Also read current users.area to allow fallback if profile is missing
+        cur.execute("SELECT area FROM users WHERE user_id=?", (user_id,))
+        urow = cur.fetchone()
+        user_area = urow[0] if urow else None
+
+        if prof is None:
+            # First-time profile creation: area is mandatory (from payload or users.area)
+            new_area = area_in if (isinstance(area_in, str) and area_in.strip()) else user_area
+            if not isinstance(new_area, str) or not new_area.strip():
+                conn.close()
+                return {"type":"ERROR","id":mid,
+                        "payload":{"code":"PROFILE_AREA_REQUIRED","message":"area is required for first-time profile"}}
+
+            # Update main user record (COALESCE preserves existing when None)
+            cur.execute(
+                "UPDATE users SET name=COALESCE(?,name), email=COALESCE(?,email), area=? , is_driver=? WHERE user_id=?",
+                (name, email, new_area, is_driver, user_id),
+            )
+
+            # Insert profile
+            cur.execute(
+                "INSERT INTO profiles (user_id, is_driver, area, vehicle_make, vehicle_model, vehicle_color, vehicle_plate) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, is_driver, new_area, v_make, v_model, v_color, v_plate),
+            )
+        else:
+            # Subsequent edits: only overwrite area if provided; otherwise keep existing profile area
+            current_area = prof[1]
+            new_area = area_in if (isinstance(area_in, str) and area_in.strip()) else current_area
+
+            # Update users + profiles
+            cur.execute(
+                "UPDATE users SET name=COALESCE(?,name), email=COALESCE(?,email), area=?, is_driver=? WHERE user_id=?",
+                (name, email, new_area, is_driver, user_id),
+            )
             cur.execute(
                 "UPDATE profiles SET is_driver=?, area=?, vehicle_make=?, vehicle_model=?, vehicle_color=?, vehicle_plate=? "
                 "WHERE user_id=?",
-                (is_driver, area, v_make, v_model, v_color, v_plate, user_id),
-            )
-        else:
-            cur.execute(
-                "INSERT INTO profiles (user_id, is_driver, area, vehicle_make, vehicle_model, vehicle_color, vehicle_plate) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (user_id, is_driver, area, v_make, v_model, v_color, v_plate),
+                (is_driver, new_area, v_make, v_model, v_color, v_plate, user_id),
             )
 
         conn.commit()
         conn.close()
         return {"type": "PROFILE.SET_RES", "id": mid, "payload": {}}
-    except Exception as e:
+
+    except Exception:
         logging.exception("profile_set failed")
-        return {"type": "ERROR", "id": mid, "payload": {"code": "SERVER_ERROR", "message": "Failed to update profile"}}
+        return {"type": "ERROR", "id": mid,
+                "payload": {"code": "SERVER_ERROR", "message": "Failed to update profile"}}
 
 def profile_get(current_user_id: int, payload: dict, mid):
     # If payload contains user_id like "user_7" we'll read that; otherwise default to current connection user.
@@ -243,6 +310,94 @@ def profile_get(current_user_id: int, payload: dict, mid):
     except Exception:
         logging.exception("profile_get failed")
         return {"type": "ERROR", "id": mid, "payload": {"code": "SERVER_ERROR", "message": "Internal error"}}
+
+#---------------------------------------------------------
+# Scheduele handlers (connection must be logged in)
+# ---------------------------------------------------------
+def schedule_set(conn_state, payload, mid):
+    uid, err = require_logged_in(conn_state, mid)
+    if err: return err
+    _ok, derr = require_driver(conn_state, mid)
+    if derr: return derr
+
+    ok, msg = validate_schedule_payload(payload or {})
+    if not ok:
+        return {"type": "ERROR", "id": mid, "payload": {"code": "BAD_REQUEST", "message": msg}}
+
+    p = payload
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO schedules (user_id, weekday, depart_time, direction, area) VALUES (?, ?, ?, ?, ?)",
+            (uid, p["weekday"], p["depart_time"], p["direction"], p["area"])
+        )
+        schedule_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return {"type": "SCHEDULE.SET_RES", "id": mid, "payload": {"schedule_id": schedule_id}}
+    except Exception:
+        logging.exception("schedule_set failed")
+        return {"type": "ERROR", "id": mid, "payload": {"code": "SERVER_ERROR", "message": "Failed to set schedule"}}
+
+
+def schedule_get(conn_state, payload, mid):
+    uid, err = require_logged_in(conn_state, mid)
+    if err: return err
+    
+    p = payload or {}
+    weekday   = p.get("weekday")
+    direction = p.get("direction")
+    area      = p.get("area")
+
+    clauses = ["user_id=?"]
+    args = [uid]
+    if isinstance(weekday, int):
+        clauses.append("weekday=?");   args.append(weekday)
+    if isinstance(area, str) and area:
+        clauses.append("area=?");      args.append(area)
+    if direction in ("to_AUB", "from_AUB"):
+        clauses.append("direction=?"); args.append(direction)
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()  # <-- FIX
+        q = "SELECT schedule_id, weekday, depart_time, direction, area FROM schedules WHERE " \
+            + " AND ".join(clauses) + " ORDER BY weekday, depart_time"
+        cur.execute(q, tuple(args))
+        items = [
+            {"schedule_id": r[0], "weekday": r[1], "depart_time": r[2], "direction": r[3], "area": r[4]}
+            for r in cur.fetchall()
+        ]
+        conn.close()
+        return {"type": "SCHEDULE.LIST_RES", "id": mid, "payload": {"items": items}}
+    except Exception:
+        logging.exception("schedule_list")
+        return {"type": "ERROR", "id": mid, "payload": {"code": "SERVER_ERROR", "message": "Failed to list schedules"}}
+
+def schedule_remove(conn_state, payload, mid):
+    uid, err = require_logged_in(conn_state, mid)
+    if err: return err
+    _ok, derr = require_driver(conn_state, mid)
+    if derr: return derr
+
+    p = payload or {}
+    sid = p.get("schedule_id")
+    if not isinstance(sid, int):
+        return {"type":"ERROR","id":mid,"payload":{"code":"BAD_REQUEST","message":"schedule_id (int) required"}}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur  = conn.cursor()
+        cur.execute("DELETE FROM schedules WHERE schedule_id=? AND user_id=?", (sid, uid))
+        deleted = cur.rowcount
+        conn.commit(); conn.close()
+        if deleted == 0:
+            return {"type":"ERROR","id":mid,"payload":{"code":"NOT_FOUND","message":"Schedule not found or not yours"}}
+        return {"type":"SCHEDULE.REMOVE_RES","id":mid,"payload":{}}
+    except Exception:
+        logging.exception("schedule_remove")
+        return {"type":"ERROR","id":mid,"payload":{"code":"SERVER_ERROR","message":"Failed to remove schedule"}}         
+
 
 # ---------------------------------------------------------
 # Dispatcher (takes per-connection state)
@@ -297,6 +452,14 @@ def handle_message(msg: dict, conn_state: dict):
 
     if mtype == "PROFILE.GET_REQ":
         return profile_get(conn_state.get("user_id"), payload, mid)
+    
+    #scheduke(require login, set/remove require driver)
+    if mtype == "SCHEDULE.SET_REQ":
+        return schedule_set(conn_state, payload, mid)
+    if mtype == "SCHEDULE.LIST_REQ":
+        return schedule_get(conn_state, payload, mid)
+    if mtype == "SCHEDULE.REMOVE_REQ":
+        return schedule_remove(conn_state, payload, mid)
 
     # Unknown
     return {"type": "ERROR", "id": mid, "payload": {"code": "UNKNOWN_TYPE", "message": f"Unsupported type: {mtype}"}}
@@ -353,6 +516,7 @@ def serve(host: str, port: int):
         finally:
             for t in threads:
                 t.join(timeout=0.1)
+
 
 def main():
     parser = argparse.ArgumentParser(description="AUBus JSON-L server (no tokens; connection-bound auth)")
