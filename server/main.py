@@ -328,6 +328,23 @@ def schedule_set(conn_state, payload, mid):
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
+
+        cur.execute("BEGIN IMMEDIATE") #to lock write into db when checking for duplicates/adding new
+        cur.execute("""
+        SELECT 1 FROM schedules WHERE user_id=? AND weekday=? AND depart_time=? AND direction=? AND area=?
+                    LIMIT 1 
+                    """, (uid, p["weekday"], p["depart_time"], p["direction"], p["area"]))
+        if cur.fetchone():
+            conn.rollback()
+            conn.close()
+            return{
+                "type":"ERROR",
+                "id":mid,
+                "payload": {
+                    "code": "SCHEDULE_DUPLICATE",
+                    "message":"This exact schedule already exists"
+                }
+            }
         cur.execute(
             "INSERT INTO schedules (user_id, weekday, depart_time, direction, area) VALUES (?, ?, ?, ?, ?)",
             (uid, p["weekday"], p["depart_time"], p["direction"], p["area"])
