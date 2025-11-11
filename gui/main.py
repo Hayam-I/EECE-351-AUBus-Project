@@ -7,9 +7,10 @@ import uuid
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
-    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QTimeEdit
+    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QTimeEdit,
+    QDateTimeEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime
 
 # ===== error popup for uncaught exceptions =====
 def excepthook(exc_type, exc, tb):
@@ -559,31 +560,139 @@ class ScheduleScreen(QWidget):
 # =============================================================================
 # Ride placeholder
 # =============================================================================
-class RidePage(QWidget):
-    def __init__(self):
-        super().__init__()
-        h = QHBoxLayout(self)
-        nav = QVBoxLayout()
-        self.btn_overview = QPushButton("Overview")
-        self.btn_chat = QPushButton("Chat")
-        self.btn_rate = QPushButton("Ratings")
-        for b in (self.btn_overview, self.btn_chat, self.btn_rate):
-            b.setCheckable(True); b.setAutoExclusive(True); nav.addWidget(b)
-        nav.addStretch(1)
+# class RidePage(QWidget):
+#     def __init__(self):
+#         super().__init__()
+#         h = QHBoxLayout(self)
+#         nav = QVBoxLayout()
+#         self.btn_overview = QPushButton("Overview")
+#         self.btn_chat = QPushButton("Chat")
+#         self.btn_rate = QPushButton("Ratings")
+#         for b in (self.btn_overview, self.btn_chat, self.btn_rate):
+#             b.setCheckable(True); b.setAutoExclusive(True); nav.addWidget(b)
+#         nav.addStretch(1)
 
-        self.sub = QStackedWidget()
-        self.sub.addWidget(title_page("Ride - Overview"))
-        self.sub.addWidget(title_page("Ride - Chat"))
-        self.sub.addWidget(title_page("Ride - Ratings"))
+#         self.sub = QStackedWidget()
+#         self.sub.addWidget(title_page("Ride - Overview"))
+#         self.sub.addWidget(title_page("Ride - Chat"))
+#         self.sub.addWidget(title_page("Ride - Ratings"))
 
-        self.btn_overview.clicked.connect(lambda: self.sub.setCurrentIndex(0))
-        self.btn_chat.clicked.connect(lambda: self.sub.setCurrentIndex(1))
-        self.btn_rate.clicked.connect(lambda: self.sub.setCurrentIndex(2))
+#         self.btn_overview.clicked.connect(lambda: self.sub.setCurrentIndex(0))
+#         self.btn_chat.clicked.connect(lambda: self.sub.setCurrentIndex(1))
+#         self.btn_rate.clicked.connect(lambda: self.sub.setCurrentIndex(2))
 
-        self.btn_overview.setChecked(True); self.sub.setCurrentIndex(0)
+#         self.btn_overview.setChecked(True); self.sub.setCurrentIndex(0)
 
-        left = QWidget(); left.setLayout(nav); left.setMinimumWidth(160)
-        h.addWidget(left); h.addWidget(self.sub, 1)
+#         left = QWidget(); left.setLayout(nav); left.setMinimumWidth(160)
+#         h.addWidget(left); h.addWidget(self.sub, 1)
+
+class RideRequestPage(QWidget):
+    def __init__(self, session: JsonlSession, parent=None):
+        super().__init__(parent)
+        self.session = session
+        
+        self.in_area = QLineEdit()
+        self.in_area.setPlaceholderText("e.g Hamra")
+        
+        self.cb_direction = QComboBox()
+        self.cb_direction.addItems(["to_AUB", "from_AUB"])
+        
+        self.dt = QDateTimeEdit(QDateTime.currentDateTime())
+        self.dt.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.dt.setCalendarPopup(True)
+        self.dt.setKeyboardTracking(False)
+        
+        self.btn_submit = QPushButton("Request Ride")
+        self.btn_submit.clicked.connect(self.on_submit)
+        
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setFormAlignment(Qt.AlignCenter | Qt.AlignTop)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+        
+        form.addRow("Area:", self.in_area)
+        form.addRow("Direction:", self.cb_direction)
+        form.addRow("Departure Time:", self.dt)
+        
+        self.err = QLabel("")
+        self.err.setWordWrap(True)
+        self.err.setStyleSheet("color: red;")
+        self.err.setVisible(False)
+        self.ok  = QLabel("")
+        self.ok.setWordWrap(True)
+        self.ok.setStyleSheet("color: #0a7a0a;")
+        self.ok.setVisible(False)
+
+        
+        self.lbl_request_id = QLabel("Request ID: —")
+        self.lbl_status     = QLabel("Status: —")
+
+        # Layout
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.btn_submit)
+        row.addStretch(1)
+        root.addLayout(row)
+        root.addSpacing(10)
+        root.addWidget(self.err)
+        root.addWidget(self.ok)
+        root.addSpacing(12)
+        root.addWidget(self.lbl_request_id)
+        root.addWidget(self.lbl_status)
+        root.addStretch(1)
+
+    def show_error(self, msg):
+        self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
+
+    def show_ok(self, msg):
+        self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
+
+    def _iso_string(self) -> str:
+        # Match server expectation: "YYYY-MM-DD HH:MM" (server replaces space with 'T' and uses fromisoformat)
+        return self.dt.dateTime().toString("yyyy-MM-dd HH:mm")
+
+    def on_submit(self):
+        area = self.in_area.text().strip()
+        if not area:
+            self.show_error("Area is required.")
+            return
+
+        payload = {
+            "area": area,
+            "direction": self.cb_direction.currentText(),
+            "time_iso": self._iso_string(),
+           
+        }
+        req = {"type": "RIDE.REQUEST_REQ", "id": str(uuid.uuid4()), "payload": payload}
+
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        rtype = resp.get("type")
+        p = resp.get("payload", {})
+
+        if rtype == "RIDE.REQUEST_RES":
+            req_id = p.get("request_id", "—")
+            found  = p.get("candidates_found", 0)
+            cast   = p.get("broadcasted_to_online", 0)
+            self.lbl_request_id.setText(f"Request ID: {req_id}")
+            # “Live status”: we show what the server tells us at submit-time.
+            # (Server doesn’t push passenger updates yet.)
+            self.lbl_status.setText(f"Status: open — candidates found: {found}, broadcasted to online: {cast}")
+            self.show_ok("Ride request created.")
+        elif rtype == "ERROR":
+            self.show_error(p.get("message", "Failed to create ride request."))
+        else:
+            self.show_error(f"Unexpected response: {rtype}") 
+                    
+              
+        
 
 # =============================================================================
 # Main window: wires everything together
@@ -625,7 +734,7 @@ class MainWindow(QMainWindow):
         self.profile_page = title_page("Profile (login required)")
         self.stack.addWidget(self.profile_page)              # index 0
         self.stack.addWidget(title_page("Your Schedule"))    # index 1
-        self.stack.addWidget(RidePage())                     # index 2
+        self.stack.addWidget(RideRequestPage(self.session))                     # index 2
 
         self.btn_profile.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         self.btn_sched.clicked.connect(lambda: self.stack.setCurrentIndex(1))
