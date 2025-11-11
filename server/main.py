@@ -30,6 +30,7 @@ import sqlite3
 import re
 from collections import defaultdict
 import time
+from datetime import datetime
 
 # ---------------------------
 # Constants and configuration
@@ -161,6 +162,17 @@ def _parse_user_id_any(u) -> int | None:
         except ValueError:
             return None
     return None
+
+def _minutes_from_hhmm(s:str) -> int:
+    hh,mm = s.split(":")
+    return int(hh) * 60 + int(mm)
+
+def _minutes_from_iso(iso_s: str) -> tuple[int, int]:
+    dt = datetime.fromisoformat(iso_s.replace(" ","T"))
+    py_wd = dt.weekday()
+    sun0 = (py_wd + 1)%7
+    minutes = dt.hour * 60 + dt.minute
+    return sun0, minutes
 
 def _broadcast_driver_candidates(request_id: str, passenger_preview: dict, candidate_user_ids: list[int]):
     ACTIVE_REQUEST_DRIVERS.setdefault(request_id, set())
@@ -490,7 +502,95 @@ def schedule_remove(conn_state, payload, mid):
         logging.exception("schedule_remove")
         return {"type":"ERROR","id":mid,"payload":{"code":"SERVER_ERROR","message":"Failed to remove schedule"}}         
 
+def ride_request_new(conn_state, payload, mid):
+    uid, err = require_logged_in(conn_state, mid)
+    if err:
+        return err
+    
+    p = payload or {}
+    area = p.get("area")
+    direction = p.get("direction")
+    time_iso = p.get("time_iso")
+    
+    if not isinstance(area,str) or not area.strip():
+        return {"type":"ERROR", "id":mid, "payload":{
+            "code": "BAD_REQUEST", "message":"area(str) required"
+        }}
+    if direction not in("to_AUB", "from_AUB"):
+        return {"type":"ERROR", "id":mid, "payload":{
+            "code":"BAD_REQUEST",
+            "message": "direction must be to and from AUB"
+        }}
+    if not isinstance(time_iso, str) or not time_iso.strip():
+        return {"type":"ERROR", "id":mid, "payload":{
+            "code":"BAD_REQUEST",
+            "message":"time_iso required"
+        }}
+    try:
+        weekday_sun0, req_minutes = _minutes_from_iso(time_iso)
+    except Exception:
+        return {"type":"ERROR", "id": mid, "payload":{
+            "code":"BAD_REQUEST",
+            "message":"time iso must be valid iso time"
+        }}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        
+         # 1) create ride request row
+        cur.execute("""
+            INSERT INTO ride_req (user_id, area, direction, departure_time, status, created_at)
+            VALUES (?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
+        """, (uid, area, direction, time_iso))
+        request_id_int = cur.lastrowid
+        request_id_str = f"req_{request_id_int}"
 
+        # 2) fetch candidate driver schedules (same weekday/area/direction; drivers only)
+        cur.execute("""
+            SELECT s.user_id, s.depart_time
+            FROM schedules s
+            JOIN users u ON u.user_id = s.user_id
+            WHERE s.weekday=? AND s.area=? AND s.direction=? AND u.is_driver=1
+        """, (weekday_sun0, area, direction))
+        rows = cur.fetchall()
+        conn.commit()
+        conn.close()
+
+        # 3) filter by ±30 minutes around requested time
+        CUTOFF = 30
+        candidate_ids = []
+        for user_id_, depart_hhmm in rows:
+            try:
+                if abs(_minutes_from_hhmm(depart_hhmm) - req_minutes) <= CUTOFF:
+                    candidate_ids.append(int(user_id_))
+            except Exception:
+                pass  # skip malformed rows safely
+
+        passenger_preview = {
+            "user_id": f"user_{uid}",
+            "area": area,
+            "direction": direction,
+            "time_iso": time_iso,
+            "request_id": request_id_str,
+        }
+
+        # 4) broadcast only to candidates who are currently online
+        sent = _broadcast_driver_candidates(request_id_str, passenger_preview, candidate_ids)
+
+        return {
+            "type": "RIDE.REQUEST_RES",
+            "id": mid,
+            "payload": {
+                "request_id": request_id_str,
+                "candidates_found": len(candidate_ids),
+                "broadcasted_to_online": sent
+            }
+        }
+    except Exception:
+        logging.exception("ride_request_new failed")
+        return {"type":"ERROR","id":mid,"payload":{"code":"SERVER_ERROR","message":"Failed to create request"}}
+
+    
 # ---------------------------------------------------------
 # Dispatcher (takes per-connection state)
 # Validates 'type' and 'id'
@@ -512,6 +612,8 @@ def handle_message(msg: dict, conn_state: dict):
         return {"type": "ERROR", "id": msg.get("id"),
                 "payload": {"code": "BAD_REQUEST", "message": "Field 'id' must be a valid UUIDv4 string"}}
 
+    _gc_requests()
+    
     mtype   = msg["type"]
     mid     = msg["id"]
     payload = msg.get("payload") or {}
@@ -538,9 +640,9 @@ def handle_message(msg: dict, conn_state: dict):
             return {"type": "ERROR", "id": mid, "payload": res}
 
     if mtype == "AUTH.LOGOUT_REQ":
-        conn_state["user_id"] = None
-        if conn_state.get("user_id") in ONLINE_DRIVERS:
-            ONLINE_DRIVERS.pop(conn_state.get("user_id"), None)
+        uid = conn_state.get("user_id")
+        if uid in ONLINE_DRIVERS:
+            ONLINE_DRIVERS.pop(uid,None)
         conn_state["user_id"] = None
         return {"type": "AUTH.LOGOUT_RES", "id": mid, "payload": {"message": "Logout Successful"}}
 
@@ -586,7 +688,10 @@ def handle_message(msg: dict, conn_state: dict):
 
         sent = _broadcast_driver_candidates(req_id, passenger_preview, cand_ids)
         return {"type": "RIDE.NEW_RES", "id": mid, "payload": {"broadcasted": sent}}
-
+    
+    if mtype == "RIDE.REQUEST_REQ":
+        return ride_request_new(conn_state, payload, mid)
+    
     # DRIVER: driver replies accept/reject for a request they received
     if mtype == "DRIVER.RESPONSE_REQ":
         # payload: { request_id: str, decision: 'accept'|'reject' }
@@ -623,6 +728,8 @@ def handle_message(msg: dict, conn_state: dict):
             ACTIVE_REQUEST_DRIVERS.pop(req_id, None)
             _REQUEST_LAST_TOUCH.pop(req_id, None)
         return {"type": "DRIVER.RESPONSE_RES", "id": mid, "payload": {"status": "recorded", "remaining": len(active) if active else 0}}
+    
+    
 
 
     # Unknown
