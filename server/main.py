@@ -28,6 +28,8 @@ import traceback
 import uuid
 import sqlite3
 import re
+from collections import defaultdict
+import time
 
 # ---------------------------
 # Constants and configuration
@@ -36,6 +38,10 @@ ENCODING = "utf-8"
 BACKLOG = 10
 RECV_BUFSIZE = 4096
 DB_PATH = "database.db"
+ONLINE_DRIVERS: dict[int, socket.socket] = {}
+ACTIVE_REQUEST_DRIVERS: dict[str, set[int]] = defaultdict(set)
+_REQUEST_LAST_TOUCH: dict[str, float] = {}
+REQUEST_TTL_SECONDS = 120  # tune as needed
 
 # ---------------------------
 # UUIDv4 validation
@@ -133,6 +139,75 @@ def require_driver(conn_state, mid):
         logging.exception("require_driver failed")
         return None, {"type": "ERROR", "id": mid,
                       "payload": {"code": "SERVER_ERROR", "message": "Internal error"}}
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+def _send_json_safe(sock: socket.socket, obj: dict):
+    try:
+        send_json(sock, obj)
+    except Exception:
+        logging.exception("send failed")
+
+def _parse_user_id_any(u) -> int | None:
+    """
+    Accept either internal int (7) or external 'user_7' and return 7.
+    """
+    if isinstance(u, int):
+        return u
+    if isinstance(u, str) and u.startswith("user_"):
+        try:
+            return int(u.split("_", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+def _broadcast_driver_candidates(request_id: str, passenger_preview: dict, candidate_user_ids: list[int]):
+    ACTIVE_REQUEST_DRIVERS.setdefault(request_id, set())
+    now = time.time()
+    sent = 0
+    for uid in candidate_user_ids:
+        sock = ONLINE_DRIVERS.get(uid)
+        if not sock:
+            continue
+        _send_json_safe(sock, {
+            "type": "DRIVER.BROADCAST",
+            "id": _uuid(),
+            "payload": {
+                "request_id": request_id,
+                "passenger_preview": passenger_preview
+            }
+        })
+        ACTIVE_REQUEST_DRIVERS[request_id].add(uid)
+        sent += 1
+    _REQUEST_LAST_TOUCH[request_id] = now
+    return sent
+
+def _notify_request_closed(request_id: str, winner_uid: int, remaining: set[int]):
+    for uid in list(remaining):
+        sock = ONLINE_DRIVERS.get(uid)
+        if not sock:
+            continue
+        _send_json_safe(sock, {
+            "type": "REQUEST.CLOSED",
+            "id": _uuid(),
+            "payload": {
+                "request_id": request_id,
+                "winner_user_id": f"user_{winner_uid}"
+            }
+        })
+
+def _on_exhausted_candidates(request_id: str):
+    # Hook: you can expand search, notify passenger, etc.
+    logging.info("request %s: no remaining driver candidates", request_id)
+
+def _gc_requests():
+    now = time.time()
+    for req_id, ts in list(_REQUEST_LAST_TOUCH.items()):
+        if now - ts > REQUEST_TTL_SECONDS:
+            logging.info("GC: expiring request %s", req_id)
+            ACTIVE_REQUEST_DRIVERS.pop(req_id, None)
+            _REQUEST_LAST_TOUCH.pop(req_id, None)
 
 # ---------------------------------------------------------
 # DB utilities
@@ -455,20 +530,35 @@ def handle_message(msg: dict, conn_state: dict):
         if ok:
             conn_state["user_id"] = res["user_id_int"]  # bind this socket to the user
             # Don't leak the internal int in payload; return only user preview
+            if res["user"].get("is_driver"):
+                ONLINE_DRIVERS[res["user_id_int"]] = conn_state.get("sock")
+
             return {"type": "AUTH.LOGIN_RES", "id": mid, "payload": {"user": res["user"]}}
         else:
             return {"type": "ERROR", "id": mid, "payload": res}
 
     if mtype == "AUTH.LOGOUT_REQ":
         conn_state["user_id"] = None
+        if conn_state.get("user_id") in ONLINE_DRIVERS:
+            ONLINE_DRIVERS.pop(conn_state.get("user_id"), None)
+        conn_state["user_id"] = None
         return {"type": "AUTH.LOGOUT_RES", "id": mid, "payload": {"message": "Logout Successful"}}
 
     # PROFILE (require connection-bound login)
     if mtype == "PROFILE.SET_REQ":
-        return profile_set(conn_state.get("user_id"), payload, mid)
+        resp = profile_set(conn_state.get("user_id"), payload, mid)
+        # If driver flag is being changed, reflect presence map
+        if resp.get("type") == "PROFILE.SET_RES" and isinstance(payload, dict) and "is_driver" in payload:
+            uid = conn_state.get("user_id")
+            if payload.get("is_driver"):
+                ONLINE_DRIVERS[uid] = conn_state.get("sock")
+            else:
+                ONLINE_DRIVERS.pop(uid, None)
+        return resp
 
     if mtype == "PROFILE.GET_REQ":
         return profile_get(conn_state.get("user_id"), payload, mid)
+
     
     #scheduke(require login, set/remove require driver)
     if mtype == "SCHEDULE.SET_REQ":
@@ -477,6 +567,63 @@ def handle_message(msg: dict, conn_state: dict):
         return schedule_get(conn_state, payload, mid)
     if mtype == "SCHEDULE.REMOVE_REQ":
         return schedule_remove(conn_state, payload, mid)
+
+
+    # RIDE: passenger posts a new request; server broadcasts to candidate drivers
+    if mtype == "RIDE.NEW_REQ":
+        # payload: { request_id: str, passenger_preview: {...}, candidate_user_ids: [int or 'user_#'] }
+        req_id = payload.get("request_id")
+        if not isinstance(req_id, str) or not req_id:
+            return {"type": "ERROR", "id": mid, "payload": {"code": "BAD_REQUEST", "message": "request_id (str) required"}}
+
+        passenger_preview = payload.get("passenger_preview") or {}
+        cands_in = payload.get("candidate_user_ids") or []
+        cand_ids: list[int] = []
+        for x in cands_in:
+            u = _parse_user_id_any(x)
+            if u is not None:
+                cand_ids.append(u)
+
+        sent = _broadcast_driver_candidates(req_id, passenger_preview, cand_ids)
+        return {"type": "RIDE.NEW_RES", "id": mid, "payload": {"broadcasted": sent}}
+
+    # DRIVER: driver replies accept/reject for a request they received
+    if mtype == "DRIVER.RESPONSE_REQ":
+        # payload: { request_id: str, decision: 'accept'|'reject' }
+        req_id = payload.get("request_id")
+        decision = payload.get("decision")
+        if not isinstance(req_id, str) or decision not in ("accept", "reject"):
+            return {"type": "ERROR", "id": mid, "payload": {"code": "BAD_REQUEST", "message": "request_id + decision required"}}
+
+        uid = conn_state.get("user_id")
+        if not uid:
+            return {"type": "ERROR", "id": mid, "payload": {"code": "FORBIDDEN", "message": "Login required"}}
+
+        active = ACTIVE_REQUEST_DRIVERS.get(req_id)
+        if not active:
+            return {"type": "DRIVER.RESPONSE_RES", "id": mid, "payload": {"status": "ignored", "reason": "unknown_request"}}
+
+        # only consider if this driver was actually a candidate
+        if uid not in active:
+            return {"type": "DRIVER.RESPONSE_RES", "id": mid, "payload": {"status": "ignored", "reason": "not_a_candidate"}}
+
+        active.discard(uid)
+        _REQUEST_LAST_TOUCH[req_id] = time.time()
+
+        if decision == "accept":
+            # inform remaining drivers that the request is closed
+            _notify_request_closed(req_id, winner_uid=uid, remaining=active.copy())
+            ACTIVE_REQUEST_DRIVERS.pop(req_id, None)
+            _REQUEST_LAST_TOUCH.pop(req_id, None)
+            return {"type": "DRIVER.RESPONSE_RES", "id": mid, "payload": {"status": "accepted"}}
+
+        # decision == "reject"
+        if not active:
+            _on_exhausted_candidates(req_id)
+            ACTIVE_REQUEST_DRIVERS.pop(req_id, None)
+            _REQUEST_LAST_TOUCH.pop(req_id, None)
+        return {"type": "DRIVER.RESPONSE_RES", "id": mid, "payload": {"status": "recorded", "remaining": len(active) if active else 0}}
+
 
     # Unknown
     return {"type": "ERROR", "id": mid, "payload": {"code": "UNKNOWN_TYPE", "message": f"Unsupported type: {mtype}"}}
@@ -489,7 +636,7 @@ def client_thread(conn: socket.socket, addr):
     logging.info("Client connected: %s", peer)
 
     # Per-connection state (no tokens; socket-bound)
-    conn_state = {"user_id": None}
+    conn_state = {"user_id": None, "sock": conn}
 
     try:
         for line in recv_lines(conn):
@@ -510,6 +657,9 @@ def client_thread(conn: socket.socket, addr):
         logging.info("Client reset: %s", peer)
     finally:
         try:
+            uid = conn_state.get("user_id")
+            if uid in ONLINE_DRIVERS and ONLINE_DRIVERS.get(uid) is conn:
+                ONLINE_DRIVERS.pop(uid, None)
             conn.close()
         except Exception:
             pass
