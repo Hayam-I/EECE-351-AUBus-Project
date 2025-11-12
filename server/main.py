@@ -193,6 +193,23 @@ def _reqid_to_int(req_id: str) -> int | None:
             return None
     return None
 
+def _normalize_peer_endpoint(conn_state: dict, announced_port: int | None) -> tuple[str | None, int | None]:
+    """
+     Choose the best (ip, port) we can give to the passenger for P2P bootstrap.
+    - IP is always the server-observed remote IP from this TCP connection.
+    - Port is driver's explicitly announced P2P port if valid, else None.
+    """
+    ip = None
+    port = None
+    try:
+        if isinstance(conn_state.get("peer"), tuple):
+            ip = conn_state["peer"][0]
+        if isinstance(announced_port, int) and 1 <= announced_port <= 65535:
+            port = announced_port
+    except Exception:
+        pass
+    return ip, port
+
 
 # ---------------------------------------------------------
 # DB utilities
@@ -628,82 +645,104 @@ def _reqid_to_int(req_id: str) -> int | None:
 
 def _ride_accept(conn_state, payload, mid):
     driver_id, err = require_logged_in(conn_state, mid)
-    if err: return err
+    if err:
+        return err
     _ok, derr = require_driver(conn_state, mid)
-    if derr: return derr
+    if derr:
+        return derr
 
     req_s = (payload or {}).get("request_id")
     req_id_int = _reqid_to_int(req_s)
     if not isinstance(req_id_int, int):
-        return {"type":"ERROR","id":mid,"payload":{"code":"BAD_REQUEST","message":"invalid request_id"}}
+        return {"type":"ERROR", "id":mid, "payload":{
+            "code":"BAD_REQUEST",
+            "message":"invalid request_id"
+        }}
 
     if driver_id in BUSY_DRIVERS or _driver_has_active_match(driver_id):
-        return {"type":"ERROR","id":mid,"payload":{"code":"DRIVER_BUSY","message":"Driver already has an active match"}}
+        return {"type":"ERROR", "id":mid, "payload":{
+            "code":"DRIVER_BUSY",
+            "message":"Driver already has an active match"
+        }}
 
-    # Pre-fetch driver IP/port once (may be None/None)
-    driver_ip, driver_port = DRIVER_PEERS.get(driver_id, (None, None))
-
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
 
-        # 1) Read the request row and validate it's open
-        cur.execute("""SELECT user_id, area, direction, departure_time, status
-                       FROM ride_req WHERE request_id=?""", (req_id_int,))
+        # 1) Ensure request exists and is open
+        cur.execute("SELECT user_id, area, direction, departure_time, status FROM ride_req WHERE request_id=?",
+                    (req_id_int,))
         row = cur.fetchone()
         if not row:
             conn.close()
-            return {"type":"ERROR","id":mid,"payload":{"code":"NOT_FOUND","message":"request not found"}}
+            return {"type":"ERROR", "id":mid, "payload":{
+                "code":"NOT_FOUND",
+                "message":"request not found"
+            }}
         passenger_id, area, direction, departure_time, req_status = row
         if req_status != "open":
             conn.close()
-            return {"type":"ERROR","id":mid,"payload":{"code":"REQUEST_CLOSED","message":"request not open"}}
+            return {"type":"ERROR", "id":mid, "payload":{
+                "code":"REQUEST_CLOSED",
+                "message":"request not open"
+            }}
 
-        # 2) Single transaction: mark request matched + write acceptance + create match
+        # 2) Resolve driver's reachable endpoint from DRIVER_PEERS
+        driver_ip, driver_port = DRIVER_PEERS.get(driver_id, (None, None))
+
+        # 3) Insert match row and mark request matched (transactionally)
+        cur.execute("""
+            INSERT INTO matches(
+                request_id, user_id, driver_id, area, direction, departure_time,
+                driver_ip, driver_port, user_ip, user_port, status, created_at, accepted_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """, (req_id_int, passenger_id, driver_id, area, direction, departure_time,
+              driver_ip, driver_port, None, None))
+
+        # Optional: record acceptance in ride_decision if your schema expects it
         try:
-            # Start TX
-            cur.execute("BEGIN IMMEDIATE")
-
-            # Mark the request as matched atomically (prevents races)
-            cur.execute("UPDATE ride_req SET status='matched' WHERE request_id=? AND status='open'",
-                        (req_id_int,))
-            if cur.rowcount != 1:
-                # Someone else won the race
-                conn.rollback()
-                conn.close()
-                return {"type":"ERROR","id":mid,"payload":{"code":"REQUEST_CLOSED","message":"request not open"}}
-
-            # Record driver’s acceptance (use your existing ride_decision table)
             cur.execute("""
-                INSERT INTO ride_decision (request_id, user_id, driver_id, status, accepted_at)
-                VALUES (?, ?, ?, 'accepted', CURRENT_TIMESTAMP)
+                INSERT INTO ride_decision(request_id, user_id, driver_id, status, decided_at)
+                VALUES(?, ?, ?, 'accepted', CURRENT_TIMESTAMP)
             """, (req_id_int, passenger_id, driver_id))
-
-            # Create the active match row
-            cur.execute("""
-                INSERT INTO matches(
-                    request_id, user_id, driver_id, area, direction, departure_time,
-                    driver_ip, driver_port, user_ip, user_port, status, created_at, accepted_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """, (req_id_int, passenger_id, driver_id, area, direction, departure_time,
-                  driver_ip, driver_port))
-
-            conn.commit()
         except Exception:
+            # If table doesn't exist or is optional, keep going
+            pass
+
+        cur.execute("UPDATE ride_req SET status='matched' WHERE request_id=? AND status='open'",
+                    (req_id_int,))
+        if cur.rowcount == 0:
             conn.rollback()
-            raise
-        finally:
             conn.close()
+            return {"type":"ERROR","id":mid,"payload":{
+                "code":"REQUEST_CLOSED","message":"request not open"}}
+
+        conn.commit()
+        conn.close()
 
     except Exception:
-        logging.exception("RIDE>ACCEPT_REQ failed")
-        return {"type":"ERROR","id":mid,"payload":{"code":"SERVER_ERROR","message":"Internal Error"}}
+        logging.exception("RIDE.ACCEPT_REQ failed")
+        try:
+            if conn:
+                conn.rollback()
+                conn.close()
+        except Exception:
+            pass
+        return {"type":"ERROR", "id":mid, "payload":{
+            "code":"SERVER_ERROR", "message":"Internal Error"
+        }}
 
-    # 3) Only after a successful COMMIT: update in-memory state + notify everyone
+    # 4) Post-commit side effects: mark driver busy, log, notify passenger once, close others
     BUSY_DRIVERS.add(driver_id)
 
-    # Notify passenger that a match is found
+    logging.info(
+        "BOOTSTRAP match: req_%s passenger user_%s <- driver user_%s at %s:%s",
+        req_id_int, passenger_id, driver_id, driver_ip, driver_port
+    )
+
+    # --- ONLY send RIDE.MATCHED here (post-commit) ---
     passenger = REQUEST_PASSENGERS.get(f"req_{req_id_int}")
     if passenger and passenger.get("sock"):
         driver_info = _driver_info_preview(driver_id)
@@ -718,17 +757,21 @@ def _ride_accept(conn_state, payload, mid):
             }
         })
 
-    # Tell all other drivers that the request is closed
-    remaining = (ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()) or set()).copy()
-    remaining.discard(driver_id)
+    # Notify remaining drivers that this request is closed
+    remaining = ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()).copy()
+    if driver_id in remaining:
+        remaining.remove(driver_id)
     _notify_request_closed(f"req_{req_id_int}", driver_id, remaining)
 
-    # Cleanup in-memory tracking for this request
+    # Cleanup request bookkeeping
     ACTIVE_REQUEST_DRIVERS.pop(f"req_{req_id_int}", None)
     _REQUEST_LAST_TOUCH.pop(f"req_{req_id_int}", None)
     REQUEST_PASSENGERS.pop(f"req_{req_id_int}", None)
 
-    return {"type":"RIDE.ACCEPT_RES","id":mid,"payload":{"request_id": f"req_{req_id_int}"}}
+    return {"type":"RIDE.ACCEPT_RES", "id":mid, "payload":{
+        "request_id": f"req_{req_id_int}"
+    }}
+
 
 #FREEING THE DRIVER LATER:
 def _free_driver(driver_id: int):
@@ -801,17 +844,29 @@ def handle_message(msg: dict, conn_state: dict):
     if mtype == "AUTH.LOGIN_REQ":
         ok, res = login_user(payload)
         if ok:
-            conn_state["user_id"] = res["user_id_int"]  # bind this socket to the user
+            uid = res["user_id_int"]
+            conn_state["user_id"] = uid  # bind this socket to the user
             user_preview = res["user"]
+
             if user_preview.get("is_driver"):
-                ONLINE_DRIVERS[res["user_id_int"]] = conn_state.get("sock")
-                if conn_state.get("peer"):
-                    DRIVER_PEERS[res["user_id_int"]] = conn_state["peer"]
-            return {"type": "AUTH.LOGIN_RES", "id":mid, "payload": {
-                "user": user_preview
-            }}
+                
+                ONLINE_DRIVERS[uid] = conn_state.get("sock")
+
+                ip = conn_state["peer"][0] if conn_state.get("peer") else None
+
+
+                old = DRIVER_PEERS.get(uid)
+                peer_port = old[1] if old else None
+
+                DRIVER_PEERS[uid] = (ip, peer_port)
+            else:
+                ONLINE_DRIVERS.pop(uid, None)
+                DRIVER_PEERS.pop(uid, None)
+
+            return {"type": "AUTH.LOGIN_RES", "id": mid, "payload": {"user": user_preview}}
         else:
-            return {"type":"ERROR","id":mid, "payload":res}
+            return {"type": "ERROR", "id": mid, "payload": res}
+
 
     if mtype == "AUTH.LOGOUT_REQ":
         uid = conn_state.get("user_id")
@@ -831,11 +886,12 @@ def handle_message(msg: dict, conn_state: dict):
             uid = conn_state.get("user_id")
             if payload.get("is_driver"):
                 ONLINE_DRIVERS[uid] = conn_state.get("sock")
-                if conn_state.get("peer"):
-                    DRIVER_PEERS[uid] = conn_state["peer"]
-                else:
-                    ONLINE_DRIVERS.pop(uid, None)
-                    DRIVER_PEERS.pop(uid, None)
+                ip = conn_state["peer"][0] if conn_state.get("peer") else None
+                old = DRIVER_PEERS.get(uid)
+                DRIVER_PEERS[uid] = (ip, old[1] if old else None)
+            else:
+                ONLINE_DRIVERS.pop(uid, None)
+                DRIVER_PEERS.pop(uid, None)
         return resp
 
     if mtype == "PROFILE.GET_REQ":
@@ -942,6 +998,73 @@ def handle_message(msg: dict, conn_state: dict):
         
     if mtype == "RIDE.ACCEPT_REQ":
         return _ride_accept(conn_state, payload, mid)
+    
+    if mtype == "PEER.ANNOUNCE_REQ":
+        uid, err = require_logged_in(conn_state, mid)
+        if err:
+            return err
+        p = payload or {}
+        peer_port = p.get("peer_port")
+        ip, port = _normalize_peer_endpoint(conn_state, peer_port)
+        if ip is None or port is None:
+            return {"type":"ERROR", "id":mid, "payload":{
+                "code":"BAD_REQUEST",
+                "message":"Provide peer port after logging in as a driver"
+            }}
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT is_driver FROM users WHERE user_id=?", (uid,))
+            row = cur.fetchone(); conn.close()
+            if not row or int(row[0]) != 1:
+                return {"type":"ERROR", "id":mid, "payload":{
+                "code":"FORBIDDEN",
+                "message":"driver mode must be on"
+            }}
+        except Exception:
+            logging.exception("PEER>ANNOUNCE check failed")
+        DRIVER_PEERS[uid] = (ip, port)
+        ONLINE_DRIVERS[uid] = conn_state.get("sock")
+        logging.info("PEER announced: user_%s -> %s:%s", uid, ip, port)
+        return {"type":"PEER.ANNOUNCE_RES","id":mid,"payload":{"ip":ip,"port":port}}
+    
+    # PEER.OPEN_REQ — driver declares its P2P listening port (TCP)
+    if mtype == "PEER.OPEN_REQ":
+        uid, err = require_logged_in(conn_state, mid)
+        if err:
+            return err
+
+        # Correct driver check (require_driver returns (ok, err))
+        _ok, derr = require_driver(conn_state, mid)
+        if derr:
+            return derr
+
+        p = payload or {}
+        p2p_port = p.get("p2p_port")
+        ext_ip    = p.get("external_ip")   # optional, if driver discovered it via UPnP/NAT-PMP
+        ext_port  = p.get("external_port") # optional, if mapping returns a different external port
+
+        # Fallback IP = server-observed remote IP of this control connection
+        seen_ip = conn_state["peer"][0] if conn_state.get("peer") else None
+
+        # Choose best info we have
+        ip   = ext_ip or seen_ip
+        port = ext_port or (p2p_port if isinstance(p2p_port, int) and 1 <= p2p_port <= 65535 else None)
+
+        if not ip or not port:
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {"code": "BAD_REQUEST", "message": "Provide p2p_port (and external_ip/port if known)"}
+            }
+
+        # Save endpoint for _ride_accept and mark driver online
+        DRIVER_PEERS[uid]   = (ip, port)
+        ONLINE_DRIVERS[uid] = conn_state.get("sock")
+
+        logging.info("PEER.OPEN: user_%s reachable at %s:%s", uid, ip, port)
+
+        return {"type": "PEER.OPEN_RES", "id": mid, "payload": {"ip": ip, "port": port}}
 
 
 
