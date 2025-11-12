@@ -1,5 +1,7 @@
 import sqlite3
 
+
+
 conn = sqlite3.connect(
     "database.db"
 )  # Using .db file instead of :memory: for persistent storage
@@ -70,12 +72,13 @@ cursor.execute(
 cursor.execute(
     """
                CREATE TABLE ride_decision(
-                   request_id INTEGER PRIMARY KEY,
+                   request_id INTEGER,
                    user_id INTEGER NOT NULL,
                    driver_id INTEGER NOT NULL,
                    status TEXT NOT NULL,
                    accepted_at TEXT,
                    declined_at TEXT,
+                   PRIMARY KEY (request_id, driver_id)
                    FOREIGN KEY(user_id) REFERENCES users(user_id),
                    FOREIGN KEY(driver_id) REFERENCES users(user_id),
                    UNIQUE(request_id, driver_id)
