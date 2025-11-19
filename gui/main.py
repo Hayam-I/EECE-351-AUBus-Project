@@ -438,19 +438,10 @@ class ScheduleScreen(QWidget):
         return self.time_edit.time().toString("HH:mm")
 
     def refresh(self):
-        # 1) remember current selection
-        selected_req_id = None
-        r = self.table.currentRow()
-        if r >= 0:
-            item0 = self.table.item(r, 0)
-            if item0 is not None:
-                selected_req_id = item0.data(Qt.UserRole)
-
-        # 2) ask server for compatible requests
         req = {
-            "type": "RIDE.LIST_REQ",
+            "type": "SCHEDULE.LIST_REQ",
             "id": str(uuid.uuid4()),
-            "payload": {},
+            "payload": {}
         }
         try:
             resp = self.session.request(req)
@@ -458,40 +449,32 @@ class ScheduleScreen(QWidget):
             self.show_error(f"Network error: {e}")
             return
 
-        if resp.get("type") != "RIDE.LIST_RES":
-            self.show_error(resp.get("payload", {}).get("message", f"Unexpected response: {resp.get('type')}"))
+        if resp.get("type") != "SCHEDULE.LIST_RES":
+            self.show_error(resp.get("payload", {}).get("message",
+                            f"Unexpected response: {resp.get('type')}"))
             return
 
         items = resp.get("payload", {}).get("items", [])
         self.table.setRowCount(0)
 
-        # 3) rebuild rows
         for item in items:
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            req_id = item.get("request_id", "—")
-            area = item.get("area", "—")
-            direction = item.get("direction", "—")
-            time_iso = item.get("time_iso", "—")
+            wd_idx = item["weekday"]
+            wd = ["Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"][wd_idx] \
+                    if 0 <= wd_idx <= 6 else str(wd_idx)
 
-            c0 = QTableWidgetItem(req_id)
-            c0.setData(Qt.UserRole, req_id)
+            c0 = QTableWidgetItem(wd)
+            c0.setData(Qt.UserRole, item["schedule_id"])   # schedule_id stored here
 
             self.table.setItem(row, 0, c0)
-            self.table.setItem(row, 1, QTableWidgetItem(area))
-            self.table.setItem(row, 2, QTableWidgetItem(direction))
-            self.table.setItem(row, 3, QTableWidgetItem(time_iso))
+            self.table.setItem(row, 1, QTableWidgetItem(item["depart_time"]))
+            self.table.setItem(row, 2, QTableWidgetItem(item["direction"]))
+            self.table.setItem(row, 3, QTableWidgetItem(item["area"]))
 
-        # 4) restore selection if possible
-        if selected_req_id is not None:
-            for row in range(self.table.rowCount()):
-                cell0 = self.table.item(row, 0)
-                if cell0 and cell0.data(Qt.UserRole) == selected_req_id:
-                    self.table.setCurrentRow(row)
-                    break
+        self.show_ok(f"Loaded {len(items)} slots.")
 
-        self.show_ok(f"Loaded {len(items)} compatible requests.")
 
 
     def on_add_slot(self):
@@ -782,6 +765,12 @@ class DriverRidePage(QWidget):
             self.show_error(payload.get("message", "Failed to accept request."))
         else:
             self.show_error(f"Unexpected response: {rtype}")
+        
+        if rtype == "RIDE.ACCEPT_RES":
+            self.show_ok(f"Accepted {req_id}.")
+            self.table.clearSelection()
+            self.refresh()
+
 
 
 # =============================================================================
@@ -934,11 +923,17 @@ class MainWindow(QMainWindow):
         self.schedule_page = title_page("Your Schedule")
         self.ride_page = RidePage(self.session)
 
-        self.stack.addWidget(self.profile_page)   # index 0
-        self.stack.addWidget(self.schedule_page)  # index 1
+        # index 0 → Profile (placeholder until login)
+        self.profile_page = title_page("Profile (login required)")
+        self.stack.addWidget(self.profile_page)              # index 0
 
+        # index 1 → Schedule (placeholder until login)
+        self.schedule_page = title_page("Your Schedule")
+        self.stack.addWidget(self.schedule_page)             # index 1
+
+        # index 2 → Ride (placeholder, will be swapped later)
         self.ride_page = RideRequestPage(self.session)
-        self.stack.addWidget(self.ride_page)      # index 2
+        self.stack.addWidget(self.ride_page)                 # index 2
 
         self.btn_profile.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         self.btn_sched.clicked.connect(lambda: self.stack.setCurrentIndex(1))
@@ -966,17 +961,15 @@ class MainWindow(QMainWindow):
         profile = ProfileScreen(self.session, user_preview)
         profile.driverModeChanged.connect(self.on_driver_mode_changed)
 
-        # replace profile page
+        # replace profile page at index 0
         self.stack.removeWidget(self.profile_page)
         self.profile_page.deleteLater()
         self.profile_page = profile
         self.stack.insertWidget(0, self.profile_page)
 
-        # Schedule screen
-        # if you had a placeholder at index 1, remove it safely
-        if hasattr(self, "schedule_page"):
-            self.stack.removeWidget(self.schedule_page)
-            self.schedule_page.deleteLater()
+        # replace schedule page at index 1
+        self.stack.removeWidget(self.schedule_page)
+        self.schedule_page.deleteLater()
         self.schedule_page = ScheduleScreen(self.session)
         self.stack.insertWidget(1, self.schedule_page)
 
@@ -988,6 +981,7 @@ class MainWindow(QMainWindow):
         self.root.setCurrentIndex(1)
         self.btn_profile.setChecked(True)
         self.stack.setCurrentIndex(0)
+
 
     def on_driver_mode_changed(self, is_driver: bool):
         # enable/disable Schedule tab
