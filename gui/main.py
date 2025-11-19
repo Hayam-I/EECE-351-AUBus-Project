@@ -7,10 +7,10 @@ import uuid
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
-    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QTimeEdit,
-    QDateTimeEdit
+    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
+    QHeaderView, QTimeEdit, QDateTimeEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer
 
 # ===== error popup for uncaught exceptions =====
 def excepthook(exc_type, exc, tb):
@@ -25,7 +25,6 @@ SOCKET_TIMEOUT = 4.0
 ENCODING = "utf-8"
 
 # ===== client helpers from client/net.py =====
-# We’ll reuse the JSONL send/recv, but manage a persistent socket here.
 from client.net import send_json, recv_json
 
 def title_page(text):
@@ -75,7 +74,7 @@ class JsonlSession:
             self.sock = None
 
 # =============================================================================
-# Register form (unchanged, still does one-shot call – safe pre-login)
+# Register form (unchanged, one-shot call – safe pre-login)
 # =============================================================================
 class RegisterForm(QWidget):
     def __init__(self, parent=None):
@@ -167,7 +166,7 @@ class RegisterForm(QWidget):
             self.show_error(f"Unexpected response: {rtype}")
 
 # =============================================================================
-# Login form (uses session so the socket remains bound post-login)
+# Login form (uses shared session so the socket remains bound post-login)
 # =============================================================================
 class LoginForm(QWidget):
     logged_in = pyqtSignal(dict)  # emits user_preview dict
@@ -217,7 +216,8 @@ class LoginForm(QWidget):
     def on_submit(self):
         self.clear_error()
         ok, payload_or_msg = self.validate()
-        if not ok: self.show_error(payload_or_msg); return
+        if not ok:
+            self.show_error(payload_or_msg); return
         req = {"type":"AUTH.LOGIN_REQ","id":str(uuid.uuid4()),"payload":payload_or_msg}
         try:
             resp = self.session.request(req)  # same socket stays open
@@ -234,7 +234,7 @@ class LoginForm(QWidget):
             self.show_error(f"Unexpected response: {rtype}")
 
 # =============================================================================
-# ProfileScreen – editable fields + Driver Mode toggle + Save + Edit + Cancel (added last two)
+# ProfileScreen
 # =============================================================================
 class ProfileScreen(QWidget):
     driverModeChanged = pyqtSignal(bool)  # emit after successful save
@@ -250,12 +250,6 @@ class ProfileScreen(QWidget):
             "is_driver": bool(user_preview.get("is_driver", False))
         }
 
-        # initial values from login
-        # self.init_user = user_preview or {}
-        # self.current_is_driver = bool(self.init_user.get("is_driver", False))
-        # self.current_area = self.init_user.get("area") or ""
-
-        # UI fields (keep minimal for P1-06)
         self.in_name = QLineEdit(self.snapshot["name"])
         self.in_email = QLineEdit(self.snapshot["email"])
         self.in_area = QLineEdit(self.snapshot["area"])
@@ -301,18 +295,16 @@ class ProfileScreen(QWidget):
         self.set_edit_mode(False)
 
     def set_edit_mode(self, on: bool):
-        #read only vs edit mode
         editing = bool(on)
         for w in (self.in_name, self.in_email, self.in_area):
             w.setReadOnly(not editing)
         self.chk_driver.setEnabled(editing)
-        
+
         self.btn_edit.setEnabled(not editing)
         self.btn_save.setEnabled(editing)
         self.btn_cancel.setEnabled(editing)
-        
-        self.setStyleSheet("QLineEdit:read-only { background: #f6f6f6; }")
 
+        self.setStyleSheet("QLineEdit:read-only { background: #f6f6f6; }")
 
     def reset_fields_from_snapshot(self):
         self.in_name.setText(self.snapshot["name"])
@@ -320,60 +312,26 @@ class ProfileScreen(QWidget):
         self.in_area.setText(self.snapshot["area"])
         self.chk_driver.setChecked(self.snapshot["is_driver"])
 
-    def show_error(self, msg): self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
-    def show_ok(self, msg): self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
+    def show_error(self, msg):
+        self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
 
-    # def on_save(self):
-        # minimal client-side validate
-        # name = self.in_name.text().strip()
-        # email = self.in_email.text().strip()
-        # area = self.in_area.text().strip()
-        # is_driver = self.chk_driver.isChecked()
-        # if not area:
-        #     self.show_error("Area is required."); return
-
-        # req = {
-        #     "type": "PROFILE.SET_REQ",
-        #     "id": str(uuid.uuid4()),
-        #     "payload": {
-        #         "is_driver": bool(is_driver),
-        #         "area": area,
-        #         # vehicle is optional in v1
-        #         # "vehicle": {...}
-        #         "name": name,     # server currently stores name/email on users table
-        #         "email": email
-        #     }
-        # }
-        # try:
-        #     resp = self.session.request(req)
-        # except Exception as e:
-        #     self.show_error(f"Network error: {e}")
-        #     return
-
-        # if resp.get("type") == "PROFILE.SET_RES":
-        #     self.show_ok("Profile saved.")
-        #     # notify parent to enable/disable Schedule
-        #     self.driverModeChanged.emit(is_driver)
-        # elif resp.get("type") == "ERROR":
-        #     self.show_error(resp.get("payload", {}).get("message", "Error saving profile"))
-        # else:
-        #     self.show_error(f"Unexpected response: {resp.get('type')}")
-
+    def show_ok(self, msg):
+        self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
 
     def on_edit(self):
         self.reset_fields_from_snapshot()
         self.set_edit_mode(True)
-    
+
     def on_cancel(self):
         self.reset_fields_from_snapshot()
         self.set_edit_mode(False)
 
     def on_save(self):
         area = self.in_area.text().strip()
-        if not area: 
+        if not area:
             self.show_error("Area is required")
             return
-        
+
         payload = {
             "name": self.in_name.text().strip(),
             "email": self.in_email.text().strip(),
@@ -386,6 +344,7 @@ class ProfileScreen(QWidget):
         except Exception as e:
             self.show_error(f"Network error: {e}")
             return
+
         if resp.get("type") == "PROFILE.SET_RES":
             prev_driver = self.snapshot["is_driver"]
             self.snapshot.update(payload)
@@ -394,13 +353,16 @@ class ProfileScreen(QWidget):
             if prev_driver != self.snapshot["is_driver"]:
                 self.driverModeChanged.emit(self.snapshot["is_driver"])
         elif resp.get("type") == "ERROR":
-            self.show_error(resp.get("payload", {})).get("message", "Failed to save profile.")
+            self.show_error(resp.get("payload", {}).get("message", "Failed to save profile."))
         else:
             self.show_error(f"Unexpected response: {resp.get('type')}")
-                
+
+# =============================================================================
+# ScheduleScreen
+# =============================================================================
 class ScheduleScreen(QWidget):
-    """adding schedule into a table, be able to delete from that table, driver mode has to be on, persistent TCP connection (to make sure user is logged in)"""
-    def __init__(self, session: JsonlSession, parent = None):
+    """Driver schedule CRUD using persistent TCP connection."""
+    def __init__(self, session: JsonlSession, parent=None):
         super().__init__(parent)
         self.session = session
 
@@ -411,7 +373,7 @@ class ScheduleScreen(QWidget):
 
         self.time_edit = QTimeEdit()
         self.time_edit.setDisplayFormat("HH:mm")
-        self.time_edit.setKeyboardTracking(False) #save selection when the user leaves it, or clicks enter/tab
+        self.time_edit.setKeyboardTracking(False)
 
         self.cb_direction = QComboBox()
         self.cb_direction.addItems(["to_AUB", "from_AUB"])
@@ -423,7 +385,7 @@ class ScheduleScreen(QWidget):
 
         for w in (self.cb_weekday, self.time_edit, self.cb_direction, self.in_area, self.btn_add):
             form.addWidget(w)
-        
+
         self.err = QLabel("")
         self.err.setWordWrap(True)
         self.err.setStyleSheet("color: red;")
@@ -468,39 +430,52 @@ class ScheduleScreen(QWidget):
         self.ok.setText(msg)
         self.ok.setVisible(True)
         self.err.setVisible(False)
-    
+
     def _weekday_index(self):
         return self.cb_weekday.currentIndex()
-    
+
     def _time_str(self):
         return self.time_edit.time().toString("HH:mm")
-    
+
     def refresh(self):
-        req = {"type": "SCHEDULE.LIST_REQ", "id": str(uuid.uuid4()), "payload":{}}
+        req = {
+            "type": "SCHEDULE.LIST_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {}
+        }
         try:
             resp = self.session.request(req)
         except Exception as e:
             self.show_error(f"Network error: {e}")
             return
+
         if resp.get("type") != "SCHEDULE.LIST_RES":
-            self.show_error(resp.get("payload", {}).get("message", f"Unexpected response: {resp.get('type')}"))
+            self.show_error(resp.get("payload", {}).get("message",
+                            f"Unexpected response: {resp.get('type')}"))
             return
-        
-        items = resp.get("payload",{}).get("items", [])
+
+        items = resp.get("payload", {}).get("items", [])
         self.table.setRowCount(0)
+
         for item in items:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            wd = ["Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"][item["weekday"]] if 0 <= item["weekday"] <= 6 else str(item["weekday"])
+
+            wd_idx = item["weekday"]
+            wd = ["Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"][wd_idx] \
+                    if 0 <= wd_idx <= 6 else str(wd_idx)
 
             c0 = QTableWidgetItem(wd)
-            c0.setData(Qt.UserRole, item["schedule_id"])
-            self.table.setItem(row,0,c0)
-            self.table.setItem(row,1,QTableWidgetItem(item["depart_time"]))
-            self.table.setItem(row,2,QTableWidgetItem(item["direction"]))
-            self.table.setItem(row,3,QTableWidgetItem(item["area"]))
+            c0.setData(Qt.UserRole, item["schedule_id"])   # schedule_id stored here
+
+            self.table.setItem(row, 0, c0)
+            self.table.setItem(row, 1, QTableWidgetItem(item["depart_time"]))
+            self.table.setItem(row, 2, QTableWidgetItem(item["direction"]))
+            self.table.setItem(row, 3, QTableWidgetItem(item["area"]))
 
         self.show_ok(f"Loaded {len(items)} slots.")
+
+
 
     def on_add_slot(self):
         area = self.in_area.text().strip()
@@ -508,10 +483,10 @@ class ScheduleScreen(QWidget):
             self.show_error("Area is required")
             return
         payload = {
-            "weekday":self._weekday_index(),
+            "weekday": self._weekday_index(),
             "depart_time": self._time_str(),
             "direction": self.cb_direction.currentText(),
-            "area":area
+            "area": area
         }
         req = {"type": "SCHEDULE.SET_REQ", "id":str(uuid.uuid4()), "payload": payload}
         try:
@@ -519,7 +494,7 @@ class ScheduleScreen(QWidget):
         except Exception as e:
             self.show_error(f"Network error: {e}")
             return
-        
+
         if resp.get("type") == "SCHEDULE.SET_RES":
             self.show_ok("Slot added.")
             self.refresh()
@@ -529,13 +504,13 @@ class ScheduleScreen(QWidget):
                 self.show_error("You have already added this exact slot, change any field to add a new one")
             else:
                 self.show_error(resp.get("payload", {}).get("message", "Failed to add slot."))
-    
+
     def on_delete_selected(self):
         r = self.table.currentRow()
         if r < 0:
             self.show_error("Select a row to delete.")
             return
-        
+
         sid = self.table.item(r,0).data(Qt.UserRole)
         if not isinstance(sid, int):
             self.show_error("Internal error: missing schedule_id.")
@@ -546,75 +521,45 @@ class ScheduleScreen(QWidget):
         except Exception as e:
             self.show_error(f"Network error: {e}")
             return
-        
+
         if resp.get("type") == "SCHEDULE.REMOVE_RES":
             self.show_ok("Slot deleted.")
             self.refresh()
         else:
             self.show_error(resp.get("payload", {}).get("message","Failed to delete slot."))
 
-
-
-        
-
 # =============================================================================
-# Ride placeholder
+# Passenger Ride Request Page
 # =============================================================================
-# class RidePage(QWidget):
-#     def __init__(self):
-#         super().__init__()
-#         h = QHBoxLayout(self)
-#         nav = QVBoxLayout()
-#         self.btn_overview = QPushButton("Overview")
-#         self.btn_chat = QPushButton("Chat")
-#         self.btn_rate = QPushButton("Ratings")
-#         for b in (self.btn_overview, self.btn_chat, self.btn_rate):
-#             b.setCheckable(True); b.setAutoExclusive(True); nav.addWidget(b)
-#         nav.addStretch(1)
-
-#         self.sub = QStackedWidget()
-#         self.sub.addWidget(title_page("Ride - Overview"))
-#         self.sub.addWidget(title_page("Ride - Chat"))
-#         self.sub.addWidget(title_page("Ride - Ratings"))
-
-#         self.btn_overview.clicked.connect(lambda: self.sub.setCurrentIndex(0))
-#         self.btn_chat.clicked.connect(lambda: self.sub.setCurrentIndex(1))
-#         self.btn_rate.clicked.connect(lambda: self.sub.setCurrentIndex(2))
-
-#         self.btn_overview.setChecked(True); self.sub.setCurrentIndex(0)
-
-#         left = QWidget(); left.setLayout(nav); left.setMinimumWidth(160)
-#         h.addWidget(left); h.addWidget(self.sub, 1)
-
 class RideRequestPage(QWidget):
     def __init__(self, session: JsonlSession, parent=None):
         super().__init__(parent)
         self.session = session
-        
+
         self.in_area = QLineEdit()
         self.in_area.setPlaceholderText("e.g Hamra")
-        
+
         self.cb_direction = QComboBox()
         self.cb_direction.addItems(["to_AUB", "from_AUB"])
-        
+
         self.dt = QDateTimeEdit(QDateTime.currentDateTime())
         self.dt.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.dt.setCalendarPopup(True)
         self.dt.setKeyboardTracking(False)
-        
+
         self.btn_submit = QPushButton("Request Ride")
         self.btn_submit.clicked.connect(self.on_submit)
-        
+
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
         form.setFormAlignment(Qt.AlignCenter | Qt.AlignTop)
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
-        
+
         form.addRow("Area:", self.in_area)
         form.addRow("Direction:", self.cb_direction)
         form.addRow("Departure Time:", self.dt)
-        
+
         self.err = QLabel("")
         self.err.setWordWrap(True)
         self.err.setStyleSheet("color: red;")
@@ -624,11 +569,9 @@ class RideRequestPage(QWidget):
         self.ok.setStyleSheet("color: #0a7a0a;")
         self.ok.setVisible(False)
 
-        
         self.lbl_request_id = QLabel("Request ID: —")
         self.lbl_status     = QLabel("Status: —")
 
-        # Layout
         root = QVBoxLayout(self)
         root.addLayout(form)
         row = QHBoxLayout()
@@ -651,7 +594,6 @@ class RideRequestPage(QWidget):
         self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
 
     def _iso_string(self) -> str:
-        # Match server expectation: "YYYY-MM-DD HH:MM" (server replaces space with 'T' and uses fromisoformat)
         return self.dt.dateTime().toString("yyyy-MM-dd HH:mm")
 
     def on_submit(self):
@@ -664,7 +606,6 @@ class RideRequestPage(QWidget):
             "area": area,
             "direction": self.cb_direction.currentText(),
             "time_iso": self._iso_string(),
-           
         }
         req = {"type": "RIDE.REQUEST_REQ", "id": str(uuid.uuid4()), "payload": payload}
 
@@ -680,19 +621,259 @@ class RideRequestPage(QWidget):
         if rtype == "RIDE.REQUEST_RES":
             req_id = p.get("request_id", "—")
             found  = p.get("candidates_found", 0)
-            cast   = p.get("broadcasted_to_online", 0)
             self.lbl_request_id.setText(f"Request ID: {req_id}")
-            # “Live status”: we show what the server tells us at submit-time.
-            # (Server doesn’t push passenger updates yet.)
-            self.lbl_status.setText(f"Status: open — candidates found: {found}, broadcasted to online: {cast}")
+            self.lbl_status.setText(f"Status: open — compatible drivers found: {found}")
             self.show_ok("Ride request created.")
         elif rtype == "ERROR":
             self.show_error(p.get("message", "Failed to create ride request."))
         else:
-            self.show_error(f"Unexpected response: {rtype}") 
-                    
-              
+            self.show_error(f"Unexpected response: {rtype}")
+
+class DriverRidePage(QWidget):
+    def __init__(self, session: JsonlSession, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Request ID", "Area", "Direction", "Departure Time"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+
+        self.err = QLabel("")
+        self.err.setWordWrap(True)
+        self.err.setStyleSheet("color: red;")
+        self.err.setVisible(False)
+
+        self.ok = QLabel("")
+        self.ok.setWordWrap(True)
+        self.ok.setStyleSheet("color: #0a7a0a;")
+        self.ok.setVisible(False)
+
+        self.btn_refresh = QPushButton("Refresh now")
+        self.btn_accept = QPushButton("Accept selected")
+
+        self.btn_refresh.clicked.connect(self.refresh)
+        self.btn_accept.clicked.connect(self.on_accept_selected)
+
+        top = QHBoxLayout()
+        top.addWidget(self.btn_refresh)
+        top.addWidget(self.btn_accept)
+        top.addStretch(1)
+
+        root = QVBoxLayout(self)
+        root.addLayout(top)
+        root.addWidget(self.err)
+        root.addWidget(self.ok)
+        root.addSpacing(6)
+        root.addWidget(self.table, 1)
+
+        # auto-refresh every 5 seconds
+        self.timer = QTimer(self)
+        self.timer.setInterval(5000)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start()
+
+        self.refresh()
+
+    def show_error(self, msg):
+        self.err.setText(msg)
+        self.err.setVisible(True)
+        self.ok.setVisible(False)
+
+    def show_ok(self, msg):
+        self.ok.setText(msg)
+        self.ok.setVisible(True)
+        self.err.setVisible(False)
+
+    def refresh(self):
+        if self.table.currentRow() >= 0:
+            return
+        req = {
+            "type": "RIDE.LIST_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {},
+        }
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        if resp.get("type") != "RIDE.LIST_RES":
+            self.show_error(resp.get("payload", {}).get("message", f"Unexpected response: {resp.get('type')}"))
+            return
+
+        items = resp.get("payload", {}).get("items", [])
+        self.table.setRowCount(0)
+
+        for item in items:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+
+            req_id = item.get("request_id", "—")
+            area = item.get("area", "—")
+            direction = item.get("direction", "—")
+            time_iso = item.get("time_iso", "—")
+
+            c0 = QTableWidgetItem(req_id)
+            # store raw request_id in UserRole, to send later
+            c0.setData(Qt.UserRole, req_id)
+
+            self.table.setItem(row, 0, c0)
+            self.table.setItem(row, 1, QTableWidgetItem(area))
+            self.table.setItem(row, 2, QTableWidgetItem(direction))
+            self.table.setItem(row, 3, QTableWidgetItem(time_iso))
+
+        self.show_ok(f"Loaded {len(items)} compatible requests.")
+
+    def on_accept_selected(self):
+        r = self.table.currentRow()
+        if r < 0:
+            self.show_error("Select a request to accept.")
+            return
+
+        item0 = self.table.item(r, 0)
+        if item0 is None:
+            self.show_error("Internal error: missing request id.")
+            return
+
+        req_id = item0.data(Qt.UserRole)
+        if not isinstance(req_id, str):
+            self.show_error("Internal error: invalid request id.")
+            return
+
+        req = {
+            "type": "RIDE.ACCEPT_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {"request_id": req_id},
+        }
+
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        rtype = resp.get("type")
+        payload = resp.get("payload", {})
+
+        if rtype == "RIDE.ACCEPT_RES":
+            self.show_ok(f"Accepted {req_id}.")
+            self.refresh()
+        elif rtype == "ERROR":
+            self.show_error(payload.get("message", "Failed to accept request."))
+        else:
+            self.show_error(f"Unexpected response: {rtype}")
         
+        if rtype == "RIDE.ACCEPT_RES":
+            self.show_ok(f"Accepted {req_id}.")
+            self.table.clearSelection()
+            self.refresh()
+
+
+
+# =============================================================================
+# Driver "Accept Ride" Page (simple, manual request_id)
+# =============================================================================
+class RideDriverPage(QWidget):
+    def __init__(self, session: JsonlSession, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        self.in_request_id = QLineEdit()
+        self.in_request_id.setPlaceholderText("e.g. req_1")
+
+        self.btn_accept = QPushButton("Accept Request")
+        self.btn_accept.clicked.connect(self.on_accept)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setFormAlignment(Qt.AlignCenter | Qt.AlignTop)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+        form.addRow("Request ID:", self.in_request_id)
+
+        self.err = QLabel("")
+        self.err.setWordWrap(True)
+        self.err.setStyleSheet("color: red;")
+        self.err.setVisible(False)
+        self.ok = QLabel("")
+        self.ok.setWordWrap(True)
+        self.ok.setStyleSheet("color: #0a7a0a;")
+        self.ok.setVisible(False)
+
+        self.lbl_result = QLabel("Result: —")
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.btn_accept)
+        row.addStretch(1)
+        root.addLayout(row)
+        root.addSpacing(10)
+        root.addWidget(self.err)
+        root.addWidget(self.ok)
+        root.addSpacing(12)
+        root.addWidget(self.lbl_result)
+        root.addStretch(1)
+
+    def show_error(self, msg):
+        self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
+
+    def show_ok(self, msg):
+        self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
+
+    def on_accept(self):
+        req_id = self.in_request_id.text().strip()
+        if not req_id:
+            self.show_error("Request ID is required (e.g. req_1).")
+            return
+
+        payload = {"request_id": req_id}
+        req = {"type": "RIDE.ACCEPT_REQ", "id": str(uuid.uuid4()), "payload": payload}
+
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        rtype = resp.get("type")
+        p = resp.get("payload", {})
+
+        if rtype == "RIDE.ACCEPT_RES":
+            self.lbl_result.setText(f"Result: accepted {p.get('request_id', req_id)}")
+            self.show_ok("Ride accepted successfully.")
+        elif rtype == "ERROR":
+            self.lbl_result.setText("Result: error")
+            self.show_error(p.get("message", "Failed to accept ride."))
+        else:
+            self.show_error(f"Unexpected response: {rtype}")
+
+# =============================================================================
+# Ride Page: tabs for Passenger / Driver
+# =============================================================================
+class RidePage(QWidget):
+    def __init__(self, session: JsonlSession, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        self.tabs = QTabWidget()
+        self.passenger_page = RideRequestPage(session)
+        self.driver_page = RideDriverPage(session)
+
+        self.tabs.addTab(self.passenger_page, "Passenger")
+        self.tabs.addTab(self.driver_page, "Driver")
+        # driver tab disabled by default until we know driver mode
+        self.tabs.setTabEnabled(1, False)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.tabs)
+
+    def set_driver_mode(self, on: bool):
+        self.tabs.setTabEnabled(1, bool(on))
 
 # =============================================================================
 # Main window: wires everything together
@@ -700,15 +881,18 @@ class RideRequestPage(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AUBus"); self.resize(1000, 650)
+        self.setWindowTitle("AUBus")
+        self.resize(1000, 650)
 
-        # Persistent session (used by login + profile + schedule)
+        # Persistent session (used by login + profile + schedule + ride)
         self.session = JsonlSession(HOST, PORT, SOCKET_TIMEOUT)
 
-        self.root = QStackedWidget(); self.setCentralWidget(self.root)
+        self.root = QStackedWidget()
+        self.setCentralWidget(self.root)
 
         # ---- Auth Page ----
-        auth_page = QWidget(); v_auth = QVBoxLayout(auth_page)
+        auth_page = QWidget()
+        v_auth = QVBoxLayout(auth_page)
         tabs = QTabWidget()
         self.login_tab = LoginForm(self.session)
         self.register_tab = RegisterForm()
@@ -718,63 +902,105 @@ class MainWindow(QMainWindow):
         self.root.addWidget(auth_page)
 
         # ---- App Page ----
-        app_page = QWidget(); self.root.addWidget(app_page)
+        app_page = QWidget()
+        self.root.addWidget(app_page)
         h = QHBoxLayout(app_page)
 
-        left = QWidget(); left_l = QVBoxLayout(left)
+        left = QWidget()
+        left_l = QVBoxLayout(left)
         self.btn_profile = QPushButton("Profile")
         self.btn_sched   = QPushButton("Schedule")
         self.btn_ride    = QPushButton("Ride")
         for b in (self.btn_profile, self.btn_sched, self.btn_ride):
-            b.setCheckable(True); b.setAutoExclusive(True); left_l.addWidget(b)
+            b.setCheckable(True)
+            b.setAutoExclusive(True)
+            left_l.addWidget(b)
         left_l.addStretch(1)
 
         self.stack = QStackedWidget()
-        # profile will be created after login (needs user data)
+        # placeholders; will be replaced after login
+        self.profile_page = title_page("Profile (login required)")
+        self.schedule_page = title_page("Your Schedule")
+        self.ride_page = RidePage(self.session)
+
+        # index 0 → Profile (placeholder until login)
         self.profile_page = title_page("Profile (login required)")
         self.stack.addWidget(self.profile_page)              # index 0
-        self.stack.addWidget(title_page("Your Schedule"))    # index 1
-        self.stack.addWidget(RideRequestPage(self.session))                     # index 2
+
+        # index 1 → Schedule (placeholder until login)
+        self.schedule_page = title_page("Your Schedule")
+        self.stack.addWidget(self.schedule_page)             # index 1
+
+        # index 2 → Ride (placeholder, will be swapped later)
+        self.ride_page = RideRequestPage(self.session)
+        self.stack.addWidget(self.ride_page)                 # index 2
 
         self.btn_profile.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         self.btn_sched.clicked.connect(lambda: self.stack.setCurrentIndex(1))
         self.btn_ride.clicked.connect(lambda: self.stack.setCurrentIndex(2))
 
-        self.btn_profile.setChecked(True); self.stack.setCurrentIndex(0)
+        self.btn_profile.setChecked(True)
+        self.stack.setCurrentIndex(0)
 
-        h.addWidget(left); h.addWidget(self.stack, 1)
+        h.addWidget(left)
+        h.addWidget(self.stack, 1)
 
         # connect login signal
         self.login_tab.logged_in.connect(self.after_login)
 
-    def set_schedule_enabled(self, on: bool):
-        # requirement: enable/disable Schedule based on Driver Mode
-        self.btn_sched.setEnabled(bool(on))
+        # Schedule initially disabled until we know driver mode
+        self.set_schedule_enabled(False)
 
-        if hasattr(self, "schedule_page"): #disable the schedule page widget
+    def set_schedule_enabled(self, on: bool):
+        self.btn_sched.setEnabled(bool(on))
+        if hasattr(self, "schedule_page"):
             self.schedule_page.setEnabled(bool(on))
 
     def after_login(self, user_preview: dict):
-        # Build the Profile screen with logged-in info + bind Save
+        # Profile screen
         profile = ProfileScreen(self.session, user_preview)
-        profile.driverModeChanged.connect(self.set_schedule_enabled)
+        profile.driverModeChanged.connect(self.on_driver_mode_changed)
 
+        # replace profile page at index 0
         self.stack.removeWidget(self.profile_page)
         self.profile_page.deleteLater()
         self.profile_page = profile
         self.stack.insertWidget(0, self.profile_page)
 
-        # reflect initial driver mode from server preview
-        self.set_schedule_enabled(bool(user_preview.get("is_driver", False)))
-
+        # replace schedule page at index 1
+        self.stack.removeWidget(self.schedule_page)
+        self.schedule_page.deleteLater()
         self.schedule_page = ScheduleScreen(self.session)
-        self.stack.removeWidget(self.stack.widget(1))
         self.stack.insertWidget(1, self.schedule_page)
+
+        # initial driver mode from server
+        is_driver = bool(user_preview.get("is_driver", False))
+        self.on_driver_mode_changed(is_driver)
 
         # switch to app
         self.root.setCurrentIndex(1)
         self.btn_profile.setChecked(True)
         self.stack.setCurrentIndex(0)
+
+
+    def on_driver_mode_changed(self, is_driver: bool):
+        # enable/disable Schedule tab
+        self.set_schedule_enabled(is_driver)
+
+        # swap ride page (index 2) between driver/passenger views
+        if hasattr(self, "ride_page"):
+            self.stack.removeWidget(self.ride_page)
+            self.ride_page.deleteLater()
+
+        if is_driver:
+            self.ride_page = DriverRidePage(self.session)
+        else:
+            self.ride_page = RideRequestPage(self.session)
+
+        self.stack.insertWidget(2, self.ride_page)
+
+
+
 
 def main():
     app = QApplication(sys.argv)

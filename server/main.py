@@ -1,3 +1,5 @@
+"this is it"
+
 #!/usr/bin/env python3
 """
 AUBus – Server
@@ -995,6 +997,98 @@ def handle_message(msg: dict, conn_state: dict):
         except Exception:
             logging.exception("RIDE.REQUEST_REQ failed")
             return {"type": "ERROR", "id": mid, "payload": {"code": "SERVER_ERROR", "message": "Failed to create request"}}
+        
+    # list open, compatible ride requests for this driver
+    if mtype == "RIDE.LIST_REQ":
+        driver_id, err = require_logged_in(conn_state, mid)
+        if err:
+            return err
+
+        _ok, derr = require_driver(conn_state, mid)
+        if derr:
+            return derr
+
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+
+            # 1) get this driver's schedules
+            cur.execute(
+                "SELECT weekday, depart_time, area, direction "
+                "FROM schedules WHERE user_id=?",
+                (driver_id,),
+            )
+            driver_scheds = cur.fetchall()
+
+            if not driver_scheds:
+                conn.close()
+                return {
+                    "type": "RIDE.LIST_RES",
+                    "id": mid,
+                    "payload": {"items": []},
+                }
+
+            # 2) get all open ride requests
+            cur.execute(
+                "SELECT request_id, user_id, area, direction, departure_time "
+                "FROM ride_req WHERE status='open'"
+            )
+            req_rows = cur.fetchall()
+            conn.close()
+
+            CUTOFF = 30  # minutes window
+            items = []
+
+            for req_id_int, passenger_id, area, direction, dep_time in req_rows:
+                try:
+                    weekday_sun0, req_minutes = _minutes_from_iso(dep_time)
+                except Exception:
+                    continue
+
+                compatible = False
+                for wd, depart_hhmm, s_area, s_dir in driver_scheds:
+                    if s_area != area or s_dir != direction:
+                        continue
+                    if wd != weekday_sun0:
+                        continue
+                    try:
+                        sched_minutes = _minutes_from_hhmm(depart_hhmm)
+                    except Exception:
+                        continue
+                    if abs(sched_minutes - req_minutes) <= CUTOFF:
+                        compatible = True
+                        break
+
+                if not compatible:
+                    continue
+
+                items.append(
+                    {
+                        "request_id": f"req_{req_id_int}",
+                        "user_id": f"user_{passenger_id}",
+                        "area": area,
+                        "direction": direction,
+                        "time_iso": dep_time,
+                    }
+                )
+
+            return {
+                "type": "RIDE.LIST_RES",
+                "id": mid,
+                "payload": {"items": items},
+            }
+
+        except Exception:
+            logging.exception("RIDE.LIST_REQ failed")
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "SERVER_ERROR",
+                    "message": "Failed to list ride requests",
+                },
+            }
+
         
     if mtype == "RIDE.ACCEPT_REQ":
         return _ride_accept(conn_state, payload, mid)
