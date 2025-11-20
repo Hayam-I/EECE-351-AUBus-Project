@@ -5,13 +5,14 @@ import re
 import socket
 import uuid
 import threading
+import logging
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QTimeEdit, QDateTimeEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
 
 # ===== error popup for uncaught exceptions =====
 def excepthook(exc_type, exc, tb):
@@ -47,12 +48,17 @@ EMAIL_RE    = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 # =============================================================================
 # Persistent JSONL session (one TCP connection per client after login)
 # =============================================================================
-class JsonlSession:
-    def __init__(self, host: str, port: int, timeout: float = 4.0):
+class JsonlSession(QObject):
+    push_reveived = pyqtSignal(dict)
+    def __init__(self, host: str, port: int, timeout: float = 4.0, parent=None):
+        super().__init__(parent)
         self.host = host
         self.port = port
         self.timeout = timeout
         self.sock: socket.socket | None = None
+    
+    def handle_push(self, msg: dict):
+        self.push_reveived.emit(msg)
 
     def ensure_connected(self):
         if self.sock is not None:
@@ -61,11 +67,42 @@ class JsonlSession:
         s.settimeout(self.timeout)
         self.sock = s
 
-    def request(self, obj: dict) -> dict:
-        """Send 1 request, wait for 1 response, over the SAME socket."""
+    def request(self, env: dict) -> dict:
+        """Send 1 request, wait for 1 response, over the SAME socket. ignore push messages"""
+        if not isinstance(env, dict):
+            raise TypeError("JsonlSession.request expects a dict envelope")
+        
         self.ensure_connected()
-        send_json(self.sock, obj)
-        return recv_json(self.sock)
+
+        mid = env.get("id")
+        if not mid:
+            mid = str(uuid.uuid4)
+            env["id"] = mid
+
+        if "payload" not in env or env["payload"] is None:
+            env["paylaod"] = {}
+
+        send_json(self.sock, env)
+
+        while True:
+            msg = recv_json(self.sock)
+            if msg is None:
+                # timeout or EOF – adjust error handling
+                raise RuntimeError(f"Timeout or disconnect waiting for response to {env.get('type')}")
+            if msg.get("id") == mid:
+                return msg
+
+            # Otherwise, treat as push / unsolicited
+            t = msg.get("type")
+            if t in ("RIDE.MATCHED", "REQUEST_CLOSED", "DRIVER.BROADCAST"):
+                self.handle_push(msg)
+                continue
+
+            # Stray message with some other id; log and ignore
+            logging.warning("JsonlSession: ignoring unsolicited message: %r", msg)
+
+
+      
 
     def close(self):
         try:
@@ -561,7 +598,7 @@ class RideRequestPage(QWidget):
         super().__init__(parent)
         self.session = session
 
-        self.current_request_id = None
+        self.current_request_id: str | None = None
 
         self.in_area = QLineEdit()
         self.in_area.setPlaceholderText("e.g Hamra")
@@ -620,6 +657,8 @@ class RideRequestPage(QWidget):
         root.addWidget(self.lbl_request_id)
         root.addWidget(self.lbl_status)
         root.addStretch(1)
+
+        self.set_idle_state()
 
     def show_error(self, msg):
         self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
@@ -681,6 +720,8 @@ class RideRequestPage(QWidget):
         if not self.current_request_id:
             self.show_error("No active request to cancel.")
             return
+        
+        
 
         req = {
             "type": "RIDE.CANCEL_REQ",
@@ -698,16 +739,47 @@ class RideRequestPage(QWidget):
         payload = resp.get("payload", {})
 
         if rtype == "RIDE.CANCEL_RES":
-            self.lbl_status.setText("Request cancelled.")
-            self.lbl_request_id.setText("Request ID: -")
             self.current_request_id = None
-            self.btn_cancel.setEnabled(False)
-            self.btn_submit.setEnabled(True)
+            self.set_idle_state()
+            QMessageBox.information(self, "Request Cancelled", "Your ride request has been cancelled.")
+            return
 
         elif rtype == "ERROR":
-            self.show_error(payload.get("message", "Failed to cancel request."))
-        else:
-            self.show_error(f"Unexpected response: {rtype}")
+            code = payload.get("code")
+            msg = payload.get("message", "Unknown error")
+            
+            if code == "INVALID_STATE":
+                QMessageBox.information(self, "Cannot cancel", "Your request has already been accepted by a driver so it not longer can be cancelled.")
+                return
+            QMessageBox.warning(self, "Cancel failed", f"Server returned error: {code or 'ERROR'} - {msg}")
+            return
+        
+        QMessageBox.warning(self, "Unexpected reply",
+                    f"Unexpected response to cancel: {rtype}")
+        
+
+    def handle_matched(self, payload):
+        self.lbl_status.setText("Status: A driver has accepted your request!")
+        self.btn_cancel.setEnabled(False)
+
+    def set_idle_state(self):
+        """Reset the page to 'no active ride request' state."""
+        self.current_request_id = None
+
+        try:
+            self.btn_cancel.setEnabled(False)
+        except AttributeError:
+            pass
+        try:
+            self.btn_submit.setEnabled(True)
+            self.lbl_request_id.setText("Request ID: —")
+            self.lbl_status.setText("Status: —")
+        except AttributeError:
+            pass
+        try:
+            self.lbl_status.setText("No active ride request.")
+        except AttributeError:
+            pass   
 
 class DriverRidePage(QWidget):
     def __init__(self, session: JsonlSession, parent=None):
@@ -852,7 +924,13 @@ class DriverRidePage(QWidget):
             self.refresh()
         else:
             self.show_error(f"Unexpected response: {rtype}")
-        
+    
+    def handle_request_closed(self, payload):
+        QMessageBox.information(self, "Request Closed", "A ride request you accepted has been closed (cancelled by passenger or expired).")
+        self.refresh()
+    
+    def add_broadcast(self, payload):
+        self.refresh()
 
 
 # =============================================================================
@@ -866,6 +944,7 @@ class MainWindow(QMainWindow):
 
         # Persistent session (used by login + profile + schedule + ride)
         self.session = JsonlSession(HOST, PORT, SOCKET_TIMEOUT)
+        self.session.push_reveived.connect(self.on_push_received)
 
         self.p2p_sock = None
         self.p2p_thread = None
@@ -1112,6 +1191,33 @@ class MainWindow(QMainWindow):
                 pass
         self.p2p_sock = None
         self.p2p_thread = None
+    
+    def on_push_received(self, msg: dict):
+        t = msg.get("type")
+
+        if t == "RIDE.MATCHED":
+            self.on_ride_matched(msg)
+        
+        elif t == "REQUEST_CLOSED":
+            self.on_request_closed(msg)
+        
+        elif t == "DRIVER.BROADCAST":
+            self.on_driver_broadcast(msg)
+    
+    def on_ride_matched(self, msg: dict):
+        payload = msg.get("payload", {})
+        if isinstance(self.ride_page, RideRequestPage):
+            self.ride_page.handle_matched(payload)
+    
+    def on_request_closed(self, msg: dict):
+        if isinstance(self.ride_page, DriverRidePage):
+            self.ride_page.handle_request_closed("payload", {})
+    
+    def on_driver_broadcast(self, msg: dict):
+        if isinstance(self.ride_page, DriverRidePage):
+            self.ride_page.add_broadcast(msg.get("payload", {}))
+    
+
 
 
 

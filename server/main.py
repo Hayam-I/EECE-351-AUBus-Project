@@ -1387,7 +1387,7 @@ def handle_message(msg: dict, conn_state: dict):
 
         return {"type": "PEER.OPEN_RES", "id": mid, "payload": {"ip": ip, "port": port}}
 
-
+    
 
 
 
