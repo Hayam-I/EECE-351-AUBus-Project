@@ -561,6 +561,8 @@ class RideRequestPage(QWidget):
         super().__init__(parent)
         self.session = session
 
+        self.current_request_id = None
+
         self.in_area = QLineEdit()
         self.in_area.setPlaceholderText("e.g Hamra")
 
@@ -574,6 +576,12 @@ class RideRequestPage(QWidget):
 
         self.btn_submit = QPushButton("Request Ride")
         self.btn_submit.clicked.connect(self.on_submit)
+
+        self.btn_cancel = QPushButton("Cancel request")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.on_cancel_clicked)
+
+        
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
@@ -602,6 +610,7 @@ class RideRequestPage(QWidget):
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(self.btn_submit)
+        row.addWidget(self.btn_cancel)
         row.addStretch(1)
         root.addLayout(row)
         root.addSpacing(10)
@@ -644,13 +653,59 @@ class RideRequestPage(QWidget):
         p = resp.get("payload", {})
 
         if rtype == "RIDE.REQUEST_RES":
-            req_id = p.get("request_id", "—")
+            req_id = p.get("request_id")
             found  = p.get("candidates_found", 0)
+
+            self.current_request_id = req_id
+            self.btn_cancel.setEnabled(True)
+            self.btn_submit.setEnabled(False)
+
             self.lbl_request_id.setText(f"Request ID: {req_id}")
+            
             self.lbl_status.setText(f"Status: open — compatible drivers found: {found}")
             self.show_ok("Ride request created.")
+
         elif rtype == "ERROR":
-            self.show_error(p.get("message", "Failed to create ride request."))
+            code = p.get("code")
+            msg = p.get("message", "Failed to create ride request")
+
+            #self.show_error(p.get("message", "Failed to create ride request."))
+            if code == "PASSENGER_BUSY":
+                self.current_request_id = None
+                self.btn_cancel.setEnabled(False)
+            self.show_error(msg)
+        else:
+            self.show_error(f"Unexpected response: {rtype}")
+
+    def on_cancel_clicked(self):
+        if not self.current_request_id:
+            self.show_error("No active request to cancel.")
+            return
+
+        req = {
+            "type": "RIDE.CANCEL_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {"request_id": self.current_request_id},
+        }
+
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        rtype = resp.get("type")
+        payload = resp.get("payload", {})
+
+        if rtype == "RIDE.CANCEL_RES":
+            self.lbl_status.setText("Request cancelled.")
+            self.lbl_request_id.setText("Request ID: -")
+            self.current_request_id = None
+            self.btn_cancel.setEnabled(False)
+            self.btn_submit.setEnabled(True)
+
+        elif rtype == "ERROR":
+            self.show_error(payload.get("message", "Failed to cancel request."))
         else:
             self.show_error(f"Unexpected response: {rtype}")
 
@@ -712,8 +767,6 @@ class DriverRidePage(QWidget):
         self.err.setVisible(False)
 
     def refresh(self):
-        if self.table.currentRow() >= 0:
-            return
         req = {
             "type": "RIDE.LIST_REQ",
             "id": str(uuid.uuid4()),
@@ -764,7 +817,7 @@ class DriverRidePage(QWidget):
             return
 
         req_id = item0.data(Qt.UserRole)
-        if not isinstance(req_id, str):
+        if req_id is None:
             self.show_error("Internal error: invalid request id.")
             return
 
@@ -788,32 +841,19 @@ class DriverRidePage(QWidget):
             self.table.clearSelection()
             self.refresh()
         elif rtype == "ERROR":
-            self.show_error(payload.get("message", "Failed to accept request."))
+            code = payload.get("code")
+            msg = payload.get("message", "Failed to accept request.")
+
+            if code == "REQUEST_CLOSED":
+                msg = "This request is no longer available (cancelled, matched, or expired)"
+            
+            self.show_error(msg)
+            self.table.clearSelection()
+            self.refresh()
         else:
             self.show_error(f"Unexpected response: {rtype}")
         
-# =============================================================================
-# Ride Page: tabs for Passenger / Driver
-# =============================================================================
-class RidePage(QWidget):
-    def __init__(self, session: JsonlSession, parent=None):
-        super().__init__(parent)
-        self.session = session
 
-        self.tabs = QTabWidget()
-        self.passenger_page = DriverRidePage(session)
-        self.driver_page = DriverRidePage(session)
-
-        self.tabs.addTab(self.passenger_page, "Passenger")
-        self.tabs.addTab(self.driver_page, "Driver")
-        # driver tab disabled by default until we know driver mode
-        self.tabs.setTabEnabled(1, False)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.tabs)
-
-    def set_driver_mode(self, on: bool):
-        self.tabs.setTabEnabled(1, bool(on))
 
 # =============================================================================
 # Main window: wires everything together
@@ -828,7 +868,7 @@ class MainWindow(QMainWindow):
         self.session = JsonlSession(HOST, PORT, SOCKET_TIMEOUT)
 
         self.p2p_sock = None
-        self.p2p_thread
+        self.p2p_thread = None
 
         self.root = QStackedWidget()
         self.setCentralWidget(self.root)
@@ -969,6 +1009,7 @@ class MainWindow(QMainWindow):
                     pass
 
                 try:
+                    self.stop_p2p_listener() 
                     self.session.close()
                 except Exception:
                     pass
@@ -984,6 +1025,11 @@ class MainWindow(QMainWindow):
         except Exception:
             # If network fails, still locally reset
             pass
+
+        self.stop_p2p_listener() #stop p2p
+
+        if isinstance(self.ride_page, DriverRidePage):
+            self.ride_page.timer.stop()  # stop auto-refresh timer
 
         self.set_schedule_enabled(False)
         self.root.setCurrentIndex(0)

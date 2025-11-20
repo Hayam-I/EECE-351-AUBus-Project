@@ -848,6 +848,28 @@ def _cancel_active_matches_for_driver(driver_id: int):
     except Exception:
         logging.exception("cancel_active_matches_for_driver failed")
 
+#this is to stop users from making requests if they have a request whose status is open/matched
+def _passenger_has_active_request(user_id: int) -> bool:
+    """
+    Returns True if this passenger already has an active ride request
+    (status = 'open' or 'matched'), False otherwise.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+        "SELECT 1 FROM ride_req WHERE user_id=? AND status IN ('open','matched') LIMIT 1",
+        (user_id,),
+    )
+
+
+        row = cur.fetchone()
+        conn.close()
+        return bool(row)
+    except Exception:
+        logging.exception("_passenger_has_active_request failed")
+        # Fail-closed: safest is to treat as 'has active' so we don't break invariants
+        return True
 
 
 
@@ -995,6 +1017,17 @@ def handle_message(msg: dict, conn_state: dict):
                 "code":"BAD_REQUEST",
                 "message":"time_iso must be valid ISO"
             }}
+                # NEW: enforce at most one active request per passenger
+        if _passenger_has_active_request(uid):
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "PASSENGER_BUSY",
+                    "message": "You already have an active ride request. Please cancel or complete it before creating a new one.",
+                },
+            }
+
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
@@ -1154,6 +1187,137 @@ def handle_message(msg: dict, conn_state: dict):
     if mtype == "RIDE.ACCEPT_REQ":
         return _ride_accept(conn_state, payload, mid)
     
+    if mtype == "DRIVER.RESPONSE_REQ":
+        uid, err = require_logged_in(conn_state, mid)
+        if err: return err
+        _ok, derr = require_driver(conn_state, mid)
+        if derr: return derr
+
+        decision = (payload or {}).get("decision")
+        req_id = (payload or {}).get("request_id")
+
+        if decision not in ("accept", "reject"):
+            return {"type":"ERROR","id":mid,"payload":{"code":"BAD_REQUEST","message":"decision must be 'accept' or 'reject'"}}
+
+        if decision == "reject":
+            # optional: record a decline; then respond
+            return {"type":"DRIVER.RESPONSE_RES","id":mid,"payload":{"status":"declined"}}
+
+        # accept path: reuse your existing logic
+        r = _ride_accept(conn_state, {"request_id": req_id}, mid)
+        if r.get("type") == "RIDE.ACCEPT_RES":
+            return {"type":"DRIVER.RESPONSE_RES","id":mid,"payload":{"status":"accepted","request_id": r["payload"]["request_id"]}}
+        else:
+            # translate server error into RESPONSE_RES or forward the ERROR directly
+            if r.get("type") == "ERROR":
+                return r
+            return {"type":"ERROR","id":mid,"payload":{"code":"SERVER_ERROR","message":"accept failed"}}
+    
+    if mtype == "RIDE.CANCEL_REQ":
+        uid, err = require_logged_in(conn_state, mid)
+        if err:
+            return err
+
+        p = payload or {}
+        req_id = p.get("request_id")
+        if not isinstance(req_id, str) or not req_id.startswith("req_"):
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "BAD_REQUEST",
+                    "message": "request_id must be like 'req_<int>'",
+                },
+            }
+        try:
+            req_id_int = int(req_id.split("_", 1)[1])
+        except Exception:
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "BAD_REQUEST",
+                    "message": "invalid request_id",
+                },
+            }
+
+        # Load request
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT user_id, status FROM ride_req WHERE request_id=?",
+                (req_id_int,),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return {
+                    "type": "ERROR",
+                    "id": mid,
+                    "payload": {
+                        "code": "NOT_FOUND",
+                        "message": "Request not found",
+                    },
+                }
+            passenger_id, status = row
+
+            # Only creator can cancel
+            if passenger_id != uid:
+                conn.close()
+                return {
+                    "type": "ERROR",
+                    "id": mid,
+                    "payload": {
+                        "code": "FORBIDDEN",
+                        "message": "You can only cancel your own requests",
+                    },
+                }
+
+            # For simplicity, allow cancel only while still open
+            if status != "open":
+                conn.close()
+                return {
+                    "type": "ERROR",
+                    "id": mid,
+                    "payload": {
+                        "code": "INVALID_STATE",
+                        "message": "Only open requests can be cancelled",
+                    },
+                }
+
+            # Mark as cancelled
+            cur.execute(
+                "UPDATE ride_req SET status='cancelled' WHERE request_id=?",
+                (req_id_int,),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            logging.exception("RIDE.CANCEL_REQ failed")
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "SERVER_ERROR",
+                    "message": "Failed to cancel request",
+                },
+            }
+
+        # Clean up in-memory tracking
+        req_key = f"req_{req_id_int}"
+        with STATE_LOCK:
+            ACTIVE_REQUEST_DRIVERS.pop(req_key, None)
+            _REQUEST_LAST_TOUCH.pop(req_key, None)
+            REQUEST_PASSENGERS.pop(req_key, None)
+
+        
+        return {
+            "type": "RIDE.CANCEL_RES",
+            "id": mid,
+            "payload": {"request_id": req_key},
+        }
+    
     if mtype == "PEER.ANNOUNCE_REQ":
         uid, err = require_logged_in(conn_state, mid)
         if err:
@@ -1223,31 +1387,7 @@ def handle_message(msg: dict, conn_state: dict):
 
         return {"type": "PEER.OPEN_RES", "id": mid, "payload": {"ip": ip, "port": port}}
 
-    if mtype == "DRIVER.RESPONSE_REQ":
-        uid, err = require_logged_in(conn_state, mid)
-        if err: return err
-        _ok, derr = require_driver(conn_state, mid)
-        if derr: return derr
 
-        decision = (payload or {}).get("decision")
-        req_id = (payload or {}).get("request_id")
-
-        if decision not in ("accept", "reject"):
-            return {"type":"ERROR","id":mid,"payload":{"code":"BAD_REQUEST","message":"decision must be 'accept' or 'reject'"}}
-
-        if decision == "reject":
-            # optional: record a decline; then respond
-            return {"type":"DRIVER.RESPONSE_RES","id":mid,"payload":{"status":"declined"}}
-
-        # accept path: reuse your existing logic
-        r = _ride_accept(conn_state, {"request_id": req_id}, mid)
-        if r.get("type") == "RIDE.ACCEPT_RES":
-            return {"type":"DRIVER.RESPONSE_RES","id":mid,"payload":{"status":"accepted","request_id": r["payload"]["request_id"]}}
-        else:
-            # translate server error into RESPONSE_RES or forward the ERROR directly
-            if r.get("type") == "ERROR":
-                return r
-            return {"type":"ERROR","id":mid,"payload":{"code":"SERVER_ERROR","message":"accept failed"}}
 
 
 
