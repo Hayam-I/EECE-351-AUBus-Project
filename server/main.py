@@ -1,4 +1,4 @@
-"this is it"
+
 
 #!/usr/bin/env python3
 """
@@ -67,6 +67,8 @@ REQUEST_TTL_SECONDS = 120
 
 REQUEST_PASSENGERS: dict[str, dict] = {}
 DRIVER_PEERS: dict[int, tuple[str,int]] = {}
+
+STATE_LOCK = threading.Lock()
 
 
 # ---------------------------
@@ -499,11 +501,12 @@ def schedule_remove(conn_state, payload, mid):
 #--------------
 def _gc_requests():
     now = time.time()
-    for req_id, ts in list(_REQUEST_LAST_TOUCH.items()):
-        if now - ts > REQUEST_TTL_SECONDS:
-            ACTIVE_REQUEST_DRIVERS.pop(req_id, None)
-            _REQUEST_LAST_TOUCH.pop(req_id, None)
-            REQUEST_PASSENGERS.pop(req_id, None)
+    with STATE_LOCK:
+        for req_id, ts in list(_REQUEST_LAST_TOUCH.items()):
+            if now - ts > REQUEST_TTL_SECONDS:
+                ACTIVE_REQUEST_DRIVERS.pop(req_id, None)
+                _REQUEST_LAST_TOUCH.pop(req_id, None)
+                REQUEST_PASSENGERS.pop(req_id, None)
 
 def _driver_info_preview(uid: int):
     """
@@ -569,14 +572,14 @@ def _driver_info_preview(uid: int):
         conn.close()
 
         return {
-            "user_id": user_id,
+            "user_id": f"user_{user_id}",
             "name": name,
             "username": username,
             "email": email,
             "is_driver": bool(is_driver),
             "area": area,
             "rating_sum": rating_sum,
-            "rating_avg": rating_avg,
+            "rating_avg": float(rating_avg) if rating_avg is not None else 0.0,
             "rating_count": rating_count,
             "vehicle": vehicle,
         }
@@ -590,41 +593,56 @@ def _driver_info_preview(uid: int):
 
 
 def _broadcast_driver_candidates(request_id: str, passenger_preview: dict, candidate_user_ids: list[int]):
-    ACTIVE_REQUEST_DRIVERS.setdefault(request_id, set())
     now = time.time()
     sent = 0
-    for uid in candidate_user_ids:
-        if uid in BUSY_DRIVERS or _driver_has_active_match(uid):
-            continue
-        sock = ONLINE_DRIVERS.get(uid)
-        if not sock:
-            continue
-        _send_json_safe(sock, {
-            "type":"DRIVER.BROADCAST",
-            "id":_uuid(),
-            "payload":{
-                "request_id": request_id,
-                "passenger_preview": passenger_preview
-            }
-            })
-        ACTIVE_REQUEST_DRIVERS[request_id].add(uid)
-        sent += 1
-    _REQUEST_LAST_TOUCH[request_id] = now
+    targets: list[tuple[socket.socket, dict]] = []
+
+    with STATE_LOCK:
+        ACTIVE_REQUEST_DRIVERS.setdefault(request_id, set())
+        for uid in candidate_user_ids:
+            if uid in BUSY_DRIVERS or _driver_has_active_match(uid):
+                continue
+            sock = ONLINE_DRIVERS.get(uid)
+            if not sock:
+                continue
+            ACTIVE_REQUEST_DRIVERS[request_id].add(uid)
+            # stash target to send outside the lock
+            targets.append((sock, {
+                "type": "DRIVER.BROADCAST",
+                "id": _uuid(),
+                "payload": {
+                    "request_id": request_id,
+                    "passenger_preview": passenger_preview,
+                },
+            }))
+            sent += 1
+        _REQUEST_LAST_TOUCH[request_id] = now
+
+    # Do network I/O without holding the lock
+    for sock, msg in targets:
+        _send_json_safe(sock, msg)
+
     return sent
 
+
 def _notify_request_closed(request_id: str, winner_uid: int, remaining: set[int]):
-    for uid in list(remaining):
-        sock = ONLINE_DRIVERS.get(uid)
-        if not sock:
-            continue
+    targets = []
+    with STATE_LOCK:
+        for uid in list(remaining):
+            sock = ONLINE_DRIVERS.get(uid)
+            if sock:
+                targets.append(sock)
+
+    for sock in targets:
         _send_json_safe(sock, {
-            "type":"REQUEST.CLOSED",
-            "id":_uuid(),
-            "payload":{
-                "request_id":request_id,
-                "winner_user_id":f"user_{winner_uid}"
-            }
+            "type": "REQUEST.CLOSED",
+            "id": _uuid(),
+            "payload": {
+                "request_id": request_id,
+                "winner_user_id": f"user_{winner_uid}",
+            },
         })
+
 def _driver_has_active_match(driver_id: int) -> bool:
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -634,7 +652,7 @@ def _driver_has_active_match(driver_id: int) -> bool:
         conn.close()
         return bool(row)
     except Exception:
-        logging.exception("_driver_has_aactive_match failed")
+        logging.exception("_driver_has_active_match failed")
         return True
         
 
@@ -653,8 +671,10 @@ def _ride_accept(conn_state, payload, mid):
             "code":"BAD_REQUEST",
             "message":"invalid request_id"
         }}
+    with STATE_LOCK:
+        busy_now = driver_id in BUSY_DRIVERS
 
-    if driver_id in BUSY_DRIVERS or _driver_has_active_match(driver_id):
+    if busy_now or _driver_has_active_match(driver_id):
         return {"type":"ERROR", "id":mid, "payload":{
             "code":"DRIVER_BUSY",
             "message":"Driver already has an active match"
@@ -692,7 +712,8 @@ def _ride_accept(conn_state, payload, mid):
 
 
         # 2) Resolve driver's reachable endpoint from DRIVER_PEERS
-        driver_ip, driver_port = DRIVER_PEERS.get(driver_id, (None, None))
+        with STATE_LOCK:
+            driver_ip, driver_port = DRIVER_PEERS.get(driver_id, (None, None))
 
         if driver_id not in ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()):
             return {"type":"ERROR","id":mid,"payload":{"code":"FORBIDDEN","message":"not eligible for this request"}}
@@ -741,7 +762,8 @@ def _ride_accept(conn_state, payload, mid):
         }}
 
     # 4) Post-commit side effects: mark driver busy, log, notify passenger once, close others
-    BUSY_DRIVERS.add(driver_id)
+    with STATE_LOCK:
+        BUSY_DRIVERS.add(driver_id)
 
     logging.info(
         "BOOTSTRAP match: req_%s passenger user_%s <- driver user_%s at %s:%s",
@@ -764,15 +786,17 @@ def _ride_accept(conn_state, payload, mid):
         })
 
     # Notify remaining drivers that this request is closed
-    remaining = ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()).copy()
-    if driver_id in remaining:
-        remaining.remove(driver_id)
+    with STATE_LOCK:
+        remaining = ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()).copy()
+        if driver_id in remaining:
+            remaining.remove(driver_id)
     _notify_request_closed(f"req_{req_id_int}", driver_id, remaining)
 
     # Cleanup request bookkeeping
-    ACTIVE_REQUEST_DRIVERS.pop(f"req_{req_id_int}", None)
-    _REQUEST_LAST_TOUCH.pop(f"req_{req_id_int}", None)
-    REQUEST_PASSENGERS.pop(f"req_{req_id_int}", None)
+    with STATE_LOCK:
+        ACTIVE_REQUEST_DRIVERS.pop(f"req_{req_id_int}", None)
+        _REQUEST_LAST_TOUCH.pop(f"req_{req_id_int}", None)
+        REQUEST_PASSENGERS.pop(f"req_{req_id_int}", None)
 
     return {"type":"RIDE.ACCEPT_RES", "id":mid, "payload":{
         "request_id": f"req_{req_id_int}"
@@ -781,7 +805,8 @@ def _ride_accept(conn_state, payload, mid):
 
 #FREEING THE DRIVER LATER:
 def _free_driver(driver_id: int):
-    BUSY_DRIVERS.discard(driver_id)
+    with STATE_LOCK:
+        BUSY_DRIVERS.discard(driver_id)
 
 def _ride_complete(conn_state, payload, mid):
     driver_id, err = require_logged_in(conn_state, mid)
@@ -855,19 +880,21 @@ def handle_message(msg: dict, conn_state: dict):
             user_preview = res["user"]
 
             if user_preview.get("is_driver"):
+                with STATE_LOCK:
                 
-                ONLINE_DRIVERS[uid] = conn_state.get("sock")
+                    ONLINE_DRIVERS[uid] = conn_state.get("sock")
 
-                ip = conn_state["peer"][0] if conn_state.get("peer") else None
+                    ip = conn_state["peer"][0] if conn_state.get("peer") else None
 
 
-                old = DRIVER_PEERS.get(uid)
-                peer_port = old[1] if old else None
+                    old = DRIVER_PEERS.get(uid)
+                    peer_port = old[1] if old else None
 
-                DRIVER_PEERS[uid] = (ip, peer_port)
+                    DRIVER_PEERS[uid] = (ip, peer_port)
             else:
-                ONLINE_DRIVERS.pop(uid, None)
-                DRIVER_PEERS.pop(uid, None)
+                with STATE_LOCK:
+                    ONLINE_DRIVERS.pop(uid, None)
+                    DRIVER_PEERS.pop(uid, None)
 
             return {"type": "AUTH.LOGIN_RES", "id": mid, "payload": {"user": user_preview}}
         else:
@@ -876,10 +903,11 @@ def handle_message(msg: dict, conn_state: dict):
 
     if mtype == "AUTH.LOGOUT_REQ":
         uid = conn_state.get("user_id")
-        if uid in ONLINE_DRIVERS:
-            ONLINE_DRIVERS.pop(uid, None)
-        if uid in DRIVER_PEERS:
-            DRIVER_PEERS.pop(uid, None)
+        with STATE_LOCK:
+            if uid in ONLINE_DRIVERS:
+                ONLINE_DRIVERS.pop(uid, None)
+            if uid in DRIVER_PEERS:
+                DRIVER_PEERS.pop(uid, None)
         conn_state["user_id"] = None
         return {"type":"AUTH.LOGOUT_RES", "id":mid, "payload":{
             "message":"Logout Successful"
@@ -890,14 +918,17 @@ def handle_message(msg: dict, conn_state: dict):
         resp = profile_set(conn_state.get("user_id"), payload, mid)
         if resp.get("type") == "PROFILE.SET_RES" and isinstance(payload, dict) and "is_driver" in payload:
             uid = conn_state.get("user_id")
-            if payload.get("is_driver"):
-                ONLINE_DRIVERS[uid] = conn_state.get("sock")
-                ip = conn_state["peer"][0] if conn_state.get("peer") else None
-                old = DRIVER_PEERS.get(uid)
-                DRIVER_PEERS[uid] = (ip, old[1] if old else None)
-            else:
-                ONLINE_DRIVERS.pop(uid, None)
-                DRIVER_PEERS.pop(uid, None)
+            if uid is not None:
+                if payload.get("is_driver"):
+                    with STATE_LOCK:
+                        ONLINE_DRIVERS[uid] = conn_state.get("sock")
+                        ip = conn_state["peer"][0] if conn_state.get("peer") else None
+                        old = DRIVER_PEERS.get(uid)
+                        DRIVER_PEERS[uid] = (ip, old[1] if old else None)
+                else:
+                    with STATE_LOCK:
+                        ONLINE_DRIVERS.pop(uid, None)
+                        DRIVER_PEERS.pop(uid, None)
         return resp
 
     if mtype == "PROFILE.GET_REQ":
@@ -930,7 +961,7 @@ def handle_message(msg: dict, conn_state: dict):
         if direction not in ("to_AUB", "from_AUB"):
            return {"type":"ERROR", "id":mid, "payload":{
                 "code":"BAD_REQUEST",
-                "message":"direction must be to and from AUB"
+                "message":"direction must be 'to_AUB' and 'from_AUB'"
             }}
         if not isinstance(time_iso, str) or not time_iso.strip():
             return {"type":"ERROR", "id":mid, "payload":{
@@ -986,10 +1017,12 @@ def handle_message(msg: dict, conn_state: dict):
             }
 
             # remember passenger socket so we can notify upon match
-            REQUEST_PASSENGERS[request_id] = {
-                "user_id": uid,
-                "sock": conn_state.get("sock"),
-            }
+            with STATE_LOCK:
+                REQUEST_PASSENGERS[request_id] = {
+                    "user_id": uid,
+                    "sock": conn_state.get("sock"),
+                }
+
 
             sent = _broadcast_driver_candidates(request_id, passenger_preview, candidate_ids)
 
@@ -1067,6 +1100,9 @@ def handle_message(msg: dict, conn_state: dict):
                 if not compatible:
                     continue
 
+                if passenger_id == driver_id:
+                    continue    
+
                 items.append(
                     {
                         "request_id": f"req_{req_id_int}",
@@ -1122,8 +1158,9 @@ def handle_message(msg: dict, conn_state: dict):
             }}
         except Exception:
             logging.exception("PEER>ANNOUNCE check failed")
-        DRIVER_PEERS[uid] = (ip, port)
-        ONLINE_DRIVERS[uid] = conn_state.get("sock")
+        with STATE_LOCK:
+            DRIVER_PEERS[uid] = (ip, port)
+            ONLINE_DRIVERS[uid] = conn_state.get("sock")
         logging.info("PEER announced: user_%s -> %s:%s", uid, ip, port)
         return {"type":"PEER.ANNOUNCE_RES","id":mid,"payload":{"ip":ip,"port":port}}
     
@@ -1158,8 +1195,9 @@ def handle_message(msg: dict, conn_state: dict):
             }
 
         # Save endpoint for _ride_accept and mark driver online
-        DRIVER_PEERS[uid]   = (ip, port)
-        ONLINE_DRIVERS[uid] = conn_state.get("sock")
+        with STATE_LOCK:
+            DRIVER_PEERS[uid]   = (ip, port)
+            ONLINE_DRIVERS[uid] = conn_state.get("sock")
 
         logging.info("PEER.OPEN: user_%s reachable at %s:%s", uid, ip, port)
 
@@ -1226,16 +1264,17 @@ def client_thread(conn: socket.socket, addr):
     finally:
         try:
             uid = conn_state.get("user_id")
-            if uid in ONLINE_DRIVERS and ONLINE_DRIVERS.get(uid) is conn:
-                ONLINE_DRIVERS.pop(uid, None)
-            DRIVER_PEERS.pop(uid, None)
-            conn.close()
+            with STATE_LOCK:
+                if uid in ONLINE_DRIVERS and ONLINE_DRIVERS.get(uid) is conn:
+                    ONLINE_DRIVERS.pop(uid, None)
+                DRIVER_PEERS.pop(uid, None)
+                conn.close()
         except Exception:
             pass
         logging.info("Client disconnected: %s", peer)
-    
-    if uid in BUSY_DRIVERS:
-        BUSY_DRIVERS.discard(uid)
+        if uid is not None:
+            BUSY_DRIVERS.discard(uid)
+            
 
 def serve(host: str, port: int):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
