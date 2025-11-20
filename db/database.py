@@ -128,5 +128,14 @@ cursor.execute(
                )
                """
 )
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS ride_chat (
+    message_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id   INTEGER NOT NULL,
+    sender_id    INTEGER NOT NULL,
+    text         TEXT NOT NULL,
+    sent_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+""")
 conn.commit()
 conn.close()

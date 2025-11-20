@@ -108,6 +108,173 @@ def _send_json_safe(sock: socket.socket, obj: dict):
     except Exception:
         logging.exception("send failed")
 
+def _driver_open_requests_list(driver_id: int, mid):
+    """Return all *open* ride requests that were broadcast to this driver."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        items = []
+        # ACTIVE_REQUEST_DRIVERS: req_id_str -> set(driver_ids)
+        for req_id_str, drivers in list(ACTIVE_REQUEST_DRIVERS.items()):
+            if driver_id not in drivers:
+                continue
+            req_id_int = _reqid_to_int(req_id_str)
+            if req_id_int is None:
+                continue
+
+            cur.execute("""
+                SELECT user_id, area, direction, departure_time, status
+                FROM ride_req
+                WHERE request_id=?
+            """, (req_id_int,))
+            row = cur.fetchone()
+            if not row:
+                continue
+
+            user_id, area, direction, departure_time, status = row
+            if status != "open":
+                continue  # ignore matched/completed/cancelled
+
+            items.append({
+                "request_id": req_id_str,
+                "passenger_user_id": f"user_{user_id}",
+                "area": area,
+                "direction": direction,
+                "time_iso": departure_time,
+            })
+
+        conn.close()
+
+        return {
+            "type": "RIDE.DRIVER_OPEN_REQS_RES",
+            "id": mid,
+            "payload": {"items": items},
+        }
+
+    except Exception:
+        logging.exception("_driver_open_requests_list failed")
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "SERVER_ERROR", "message": "Failed to list requests"},
+        }
+
+
+def _chat_send(conn_state, payload, mid):
+    uid = conn_state.get("user_id")
+    if not uid:
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "FORBIDDEN", "message": "Login required"},
+        }
+
+    p = payload or {}
+    req_s = p.get("request_id")
+    text = p.get("text", "").strip()
+    req_id_int = _reqid_to_int(req_s)
+
+    if not isinstance(req_id_int, int) or not text:
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "BAD_REQUEST", "message": "request_id and non-empty text required"},
+        }
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        # optional: verify request exists
+        cur.execute("SELECT 1 FROM ride_req WHERE request_id=?", (req_id_int,))
+        if not cur.fetchone():
+            conn.close()
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {"code": "NOT_FOUND", "message": "Request not found"},
+            }
+
+        cur.execute(
+            "INSERT INTO ride_chat(request_id, sender_id, text) VALUES (?, ?, ?)",
+            (req_id_int, uid, text),
+        )
+        msg_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return {
+            "type": "RIDE.CHAT_SEND_RES",
+            "id": mid,
+            "payload": {"message_id": msg_id},
+        }
+    except Exception:
+        logging.exception("_chat_send failed")
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "SERVER_ERROR", "message": "Failed to send message"},
+        }
+
+
+def _chat_poll(conn_state, payload, mid):
+    uid = conn_state.get("user_id")
+    if not uid:
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "FORBIDDEN", "message": "Login required"},
+        }
+
+    p = payload or {}
+    req_s = p.get("request_id")
+    after_id = p.get("after_message_id", 0)
+    req_id_int = _reqid_to_int(req_s)
+
+    if not isinstance(req_id_int, int):
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "BAD_REQUEST", "message": "request_id required"},
+        }
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT message_id, sender_id, text, sent_at
+            FROM ride_chat
+            WHERE request_id=? AND message_id>?
+            ORDER BY message_id ASC
+            """,
+            (req_id_int, int(after_id)),
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        messages = []
+        for mid_int, sender_id, text, sent_at in rows:
+            messages.append({
+                "message_id": mid_int,
+                "sender_user_id": f"user_{sender_id}",
+                "text": text,
+                "sent_at": sent_at,
+            })
+
+        return {
+            "type": "RIDE.CHAT_POLL_RES",
+            "id": mid,
+            "payload": {"messages": messages},
+        }
+    except Exception:
+        logging.exception("_chat_poll failed")
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "SERVER_ERROR", "message": "Failed to fetch messages"},
+        }
 
 # ---------------------------------------------------------
 # Validation helpers (time/registration/login/schedule/requests)
@@ -594,19 +761,19 @@ def _broadcast_driver_candidates(request_id: str, passenger_preview: dict, candi
     now = time.time()
     sent = 0
     for uid in candidate_user_ids:
-        if uid in BUSY_DRIVERS or _driver_has_active_match(uid):
-            continue
+        # Allow driver to have multiple active matches
+        # (no BUSY_DRIVERS / _driver_has_active_match filter)
         sock = ONLINE_DRIVERS.get(uid)
         if not sock:
             continue
         _send_json_safe(sock, {
-            "type":"DRIVER.BROADCAST",
-            "id":_uuid(),
-            "payload":{
+            "type": "DRIVER.BROADCAST",
+            "id": _uuid(),
+            "payload": {
                 "request_id": request_id,
                 "passenger_preview": passenger_preview
             }
-            })
+        })
         ACTIVE_REQUEST_DRIVERS[request_id].add(uid)
         sent += 1
     _REQUEST_LAST_TOUCH[request_id] = now
@@ -659,12 +826,6 @@ def _ride_accept(conn_state, payload, mid):
         return {"type":"ERROR", "id":mid, "payload":{
             "code":"BAD_REQUEST",
             "message":"invalid request_id"
-        }}
-
-    if driver_id in BUSY_DRIVERS or _driver_has_active_match(driver_id):
-        return {"type":"ERROR", "id":mid, "payload":{
-            "code":"DRIVER_BUSY",
-            "message":"Driver already has an active match"
         }}
 
     conn = None
@@ -721,6 +882,7 @@ def _ride_accept(conn_state, payload, mid):
             return {"type":"ERROR","id":mid,"payload":{
                 "code":"REQUEST_CLOSED","message":"request not open"}}
 
+        
         conn.commit()
         conn.close()
 
@@ -735,9 +897,6 @@ def _ride_accept(conn_state, payload, mid):
         return {"type":"ERROR", "id":mid, "payload":{
             "code":"SERVER_ERROR", "message":"Internal Error"
         }}
-
-    # 4) Post-commit side effects: mark driver busy, log, notify passenger once, close others
-    BUSY_DRIVERS.add(driver_id)
 
     logging.info(
         "BOOTSTRAP match: req_%s passenger user_%s <- driver user_%s at %s:%s",
@@ -773,6 +932,44 @@ def _ride_accept(conn_state, payload, mid):
     return {"type":"RIDE.ACCEPT_RES", "id":mid, "payload":{
         "request_id": f"req_{req_id_int}"
     }}
+
+def _driver_matches_list(driver_id: int, mid):
+    """Return all active matches for this driver."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT request_id, user_id, area, direction, departure_time, status
+            FROM matches
+            WHERE driver_id=? AND status='active'
+            ORDER BY accepted_at DESC
+        """, (driver_id,))
+        rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        logging.exception("_driver_matches_list failed")
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "SERVER_ERROR", "message": "Failed to list matches"},
+        }
+
+    items = []
+    for req_id_int, passenger_id, area, direction, departure_time, status in rows:
+        items.append({
+            "request_id": f"req_{req_id_int}",
+            "passenger_user_id": f"user_{passenger_id}",
+            "area": area,
+            "direction": direction,
+            "time_iso": departure_time,
+            "status": status,
+        })
+
+    return {
+        "type": "RIDE.DRIVER_MATCHES_RES",
+        "id": mid,
+        "payload": {"items": items},
+    }
 
 
 #FREEING THE DRIVER LATER:
@@ -956,9 +1153,14 @@ def handle_message(msg: dict, conn_state: dict):
                 SELECT s.user_id, s.depart_time
                 FROM schedules s
                 JOIN users u ON u.user_id = s.user_id
-                WHERE s.weekday=? AND s.area=? AND s.direction=? AND u.is_driver=1
+                WHERE s.weekday=? AND lower(s.area)=lower(?) AND s.direction=? AND u.is_driver=1
             """, (weekday_sun0, area, direction))
+
             rows = cur.fetchall()
+            logging.info(
+                "RIDE.REQUEST_REQ uid=%s weekday=%s area=%r direction=%s rows=%r",
+                uid, weekday_sun0, area, direction, rows
+            )
             conn.commit()
             conn.close()
 
@@ -1088,10 +1290,119 @@ def handle_message(msg: dict, conn_state: dict):
                     "message": "Failed to list ride requests",
                 },
             }
-
         
     if mtype == "RIDE.ACCEPT_REQ":
         return _ride_accept(conn_state, payload, mid)
+    
+    if mtype == "RIDE.DRIVER_OPEN_REQS_REQ":
+        driver_id, err = require_logged_in(conn_state, mid)
+        if err:
+            return err
+
+        # make sure this user is a driver
+        _ok, derr = require_driver(conn_state, mid)
+        if derr:
+            return derr
+
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+
+            # 1) get all schedules for this driver
+            cur.execute("""
+                SELECT weekday, depart_time, area, direction
+                FROM schedules
+                WHERE user_id=?
+            """, (driver_id,))
+            schedules = cur.fetchall()
+
+            if not schedules:
+                conn.close()
+                return {
+                    "type": "RIDE.DRIVER_OPEN_REQS_RES",
+                    "id": mid,
+                    "payload": {"items": []}
+                }
+
+            # Build a list of open requests compatible with ANY of the schedules
+            items = []
+            CUTOFF = 30  # minutes window
+
+            # For simplicity, fetch all open ride_req rows, then filter in Python
+            cur.execute("""
+                SELECT request_id, user_id, area, direction, departure_time, status
+                FROM ride_req
+                WHERE status='open'
+            """)
+            req_rows = cur.fetchall()
+
+            for (req_id_int, passenger_id, req_area, req_dir, req_time_iso, status) in req_rows:
+                try:
+                    # parse request time -> weekday + minutes
+                    weekday_sun0, req_minutes = _minutes_from_iso(req_time_iso)
+                except Exception:
+                    continue
+
+                # check against each driver schedule
+                compatible = False
+                for (sch_wd, sch_time, sch_area, sch_dir) in schedules:
+                    if sch_dir != req_dir:
+                        continue
+                    # area case-insensitive
+                    if sch_area.strip().lower() != (req_area or "").strip().lower():
+                        continue
+                    # weekday must match
+                    if sch_wd != weekday_sun0:
+                        continue
+                    # time within ± CUTOFF
+                    try:
+                        sch_minutes = _minutes_from_hhmm(sch_time)
+                    except Exception:
+                        continue
+                    if abs(sch_minutes - req_minutes) <= CUTOFF:
+                        compatible = True
+                        break
+
+                if not compatible:
+                    continue
+
+                items.append({
+                    "request_id": f"req_{req_id_int}",
+                    "area": req_area,
+                    "direction": req_dir,
+                    "time_iso": req_time_iso,
+                })
+
+            conn.close()
+
+            return {
+                "type": "RIDE.DRIVER_OPEN_REQS_RES",
+                "id": mid,
+                "payload": {"items": items},
+            }
+
+        except Exception:
+            logging.exception("RIDE.DRIVER_OPEN_REQS_REQ failed")
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "SERVER_ERROR",
+                    "message": "Failed to list driver-compatible requests",
+                },
+            }
+
+    if mtype == "RIDE.DRIVER_MATCHES_REQ":
+        driver_id, err = require_logged_in(conn_state, mid)
+        if err:
+            return err
+        _ok, derr = require_driver(conn_state, mid)
+        if derr:
+            return derr
+        return _driver_matches_list(driver_id, mid)
+
+    if mtype == "RIDE.COMPLETE_REQ":
+        return _ride_complete(conn_state, payload, mid)
     
     if mtype == "PEER.ANNOUNCE_REQ":
         uid, err = require_logged_in(conn_state, mid)
