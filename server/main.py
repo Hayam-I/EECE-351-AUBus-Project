@@ -370,7 +370,7 @@ def profile_get(current_user_id: int, payload: dict, mid):
         conn = sqlite3.connect(DB_PATH)
         cur  = conn.cursor()
         cur.execute(
-            "SELECT user_id,name,username,password,email,is_driver,area,rating_sum,rating_avg,rating_count"
+            "SELECT user_id,name,username,password,email,is_driver,area,rating_sum,rating_avg,rating_count "
             "FROM users WHERE user_id=?",
             (target_uid,),
         )
@@ -637,13 +637,6 @@ def _driver_has_active_match(driver_id: int) -> bool:
         logging.exception("_driver_has_aactive_match failed")
         return True
         
-def _reqid_to_int(req_id: str) -> int | None:
-    if isinstance(req_id, str) and req_id.startswith("req_"):
-        try:
-            return int(req_id.split("_",1)[1])
-        except ValueError:
-            return None
-    return None
 
 def _ride_accept(conn_state, payload, mid):
     driver_id, err = require_logged_in(conn_state, mid)
@@ -666,6 +659,10 @@ def _ride_accept(conn_state, payload, mid):
             "code":"DRIVER_BUSY",
             "message":"Driver already has an active match"
         }}
+    
+    if time.time() - _REQUEST_LAST_TOUCH.get(f"req_{req_id_int}", 0) > REQUEST_TTL_SECONDS:
+        return {"type":"ERROR","id":mid,"payload":{"code":"REQUEST_EXPIRED","message":"request expired"}}
+    
 
     conn = None
     try:
@@ -689,9 +686,16 @@ def _ride_accept(conn_state, payload, mid):
                 "code":"REQUEST_CLOSED",
                 "message":"request not open"
             }}
+        
+        if driver_id == passenger_id:
+            return {"type":"ERROR","id":mid,"payload":{"code":"BAD_REQUEST","message":"cannot accept your own request"}}
+
 
         # 2) Resolve driver's reachable endpoint from DRIVER_PEERS
         driver_ip, driver_port = DRIVER_PEERS.get(driver_id, (None, None))
+
+        if driver_id not in ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()):
+            return {"type":"ERROR","id":mid,"payload":{"code":"FORBIDDEN","message":"not eligible for this request"}}
 
         # 3) Insert match row and mark request matched (transactionally)
         cur.execute("""
@@ -971,6 +975,7 @@ def handle_message(msg: dict, conn_state: dict):
                         candidate_ids.append(int(driver_id))
                 except Exception:
                     pass
+            candidate_ids = [d for d in candidate_ids if d != uid] 
 
             passenger_preview = {
                 "user_id": f"user_{uid}",
@@ -1160,6 +1165,32 @@ def handle_message(msg: dict, conn_state: dict):
 
         return {"type": "PEER.OPEN_RES", "id": mid, "payload": {"ip": ip, "port": port}}
 
+    if mtype == "DRIVER.RESPONSE_REQ":
+        uid, err = require_logged_in(conn_state, mid)
+        if err: return err
+        _ok, derr = require_driver(conn_state, mid)
+        if derr: return derr
+
+        decision = (payload or {}).get("decision")
+        req_id = (payload or {}).get("request_id")
+
+        if decision not in ("accept", "reject"):
+            return {"type":"ERROR","id":mid,"payload":{"code":"BAD_REQUEST","message":"decision must be 'accept' or 'reject'"}}
+
+        if decision == "reject":
+            # optional: record a decline; then respond
+            return {"type":"DRIVER.RESPONSE_RES","id":mid,"payload":{"status":"declined"}}
+
+        # accept path: reuse your existing logic
+        r = _ride_accept(conn_state, {"request_id": req_id}, mid)
+        if r.get("type") == "RIDE.ACCEPT_RES":
+            return {"type":"DRIVER.RESPONSE_RES","id":mid,"payload":{"status":"accepted","request_id": r["payload"]["request_id"]}}
+        else:
+            # translate server error into RESPONSE_RES or forward the ERROR directly
+            if r.get("type") == "ERROR":
+                return r
+            return {"type":"ERROR","id":mid,"payload":{"code":"SERVER_ERROR","message":"accept failed"}}
+
 
 
     # Unknown
@@ -1202,6 +1233,9 @@ def client_thread(conn: socket.socket, addr):
         except Exception:
             pass
         logging.info("Client disconnected: %s", peer)
+    
+    if uid in BUSY_DRIVERS:
+        BUSY_DRIVERS.discard(uid)
 
 def serve(host: str, port: int):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
