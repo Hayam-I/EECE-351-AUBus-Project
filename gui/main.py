@@ -438,6 +438,14 @@ class ScheduleScreen(QWidget):
         return self.time_edit.time().toString("HH:mm")
 
     def refresh(self):
+        # remember currently selected schedule_id (if any)
+        current_row = self.table.currentRow()
+        selected_sched_id = None
+        if current_row >= 0:
+            item0 = self.table.item(current_row, 0)
+            if item0 is not None:
+                selected_sched_id = item0.data(Qt.UserRole)
+
         req = {
             "type": "SCHEDULE.LIST_REQ",
             "id": str(uuid.uuid4()),
@@ -450,8 +458,12 @@ class ScheduleScreen(QWidget):
             return
 
         if resp.get("type") != "SCHEDULE.LIST_RES":
-            self.show_error(resp.get("payload", {}).get("message",
-                            f"Unexpected response: {resp.get('type')}"))
+            self.show_error(
+                resp.get("payload", {}).get(
+                    "message",
+                    f"Unexpected response: {resp.get('type')}"
+                )
+            )
             return
 
         items = resp.get("payload", {}).get("items", [])
@@ -463,17 +475,29 @@ class ScheduleScreen(QWidget):
 
             wd_idx = item["weekday"]
             wd = ["Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"][wd_idx] \
-                    if 0 <= wd_idx <= 6 else str(wd_idx)
+                if 0 <= wd_idx <= 6 else str(wd_idx)
 
             c0 = QTableWidgetItem(wd)
-            c0.setData(Qt.UserRole, item["schedule_id"])   # schedule_id stored here
+            # store schedule_id here
+            c0.setData(Qt.UserRole, item["schedule_id"])
 
             self.table.setItem(row, 0, c0)
             self.table.setItem(row, 1, QTableWidgetItem(item["depart_time"]))
             self.table.setItem(row, 2, QTableWidgetItem(item["direction"]))
             self.table.setItem(row, 3, QTableWidgetItem(item["area"]))
 
-        self.show_ok(f"Loaded {len(items)} slots.")
+        # try to reselect previous schedule if it still exists
+        if selected_sched_id is not None:
+            for row in range(self.table.rowCount()):
+                item0 = self.table.item(row, 0)
+                if item0 is not None and item0.data(Qt.UserRole) == selected_sched_id:
+                    self.table.setCurrentCell(row, 0)
+                    break
+
+        # up to you if you keep this; it will pop a dialog every refresh
+        # self.show_ok(f"Loaded {len(items)} slots.")
+
+
 
 
 
@@ -760,98 +784,13 @@ class DriverRidePage(QWidget):
 
         if rtype == "RIDE.ACCEPT_RES":
             self.show_ok(f"Accepted {req_id}.")
+            self.table.clearSelection()
             self.refresh()
         elif rtype == "ERROR":
             self.show_error(payload.get("message", "Failed to accept request."))
         else:
             self.show_error(f"Unexpected response: {rtype}")
         
-        if rtype == "RIDE.ACCEPT_RES":
-            self.show_ok(f"Accepted {req_id}.")
-            self.table.clearSelection()
-            self.refresh()
-
-
-
-# =============================================================================
-# Driver "Accept Ride" Page (simple, manual request_id)
-# =============================================================================
-class RideDriverPage(QWidget):
-    def __init__(self, session: JsonlSession, parent=None):
-        super().__init__(parent)
-        self.session = session
-
-        self.in_request_id = QLineEdit()
-        self.in_request_id.setPlaceholderText("e.g. req_1")
-
-        self.btn_accept = QPushButton("Accept Request")
-        self.btn_accept.clicked.connect(self.on_accept)
-
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
-        form.setFormAlignment(Qt.AlignCenter | Qt.AlignTop)
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
-        form.addRow("Request ID:", self.in_request_id)
-
-        self.err = QLabel("")
-        self.err.setWordWrap(True)
-        self.err.setStyleSheet("color: red;")
-        self.err.setVisible(False)
-        self.ok = QLabel("")
-        self.ok.setWordWrap(True)
-        self.ok.setStyleSheet("color: #0a7a0a;")
-        self.ok.setVisible(False)
-
-        self.lbl_result = QLabel("Result: —")
-
-        root = QVBoxLayout(self)
-        root.addLayout(form)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        row.addWidget(self.btn_accept)
-        row.addStretch(1)
-        root.addLayout(row)
-        root.addSpacing(10)
-        root.addWidget(self.err)
-        root.addWidget(self.ok)
-        root.addSpacing(12)
-        root.addWidget(self.lbl_result)
-        root.addStretch(1)
-
-    def show_error(self, msg):
-        self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
-
-    def show_ok(self, msg):
-        self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
-
-    def on_accept(self):
-        req_id = self.in_request_id.text().strip()
-        if not req_id:
-            self.show_error("Request ID is required (e.g. req_1).")
-            return
-
-        payload = {"request_id": req_id}
-        req = {"type": "RIDE.ACCEPT_REQ", "id": str(uuid.uuid4()), "payload": payload}
-
-        try:
-            resp = self.session.request(req)
-        except Exception as e:
-            self.show_error(f"Network error: {e}")
-            return
-
-        rtype = resp.get("type")
-        p = resp.get("payload", {})
-
-        if rtype == "RIDE.ACCEPT_RES":
-            self.lbl_result.setText(f"Result: accepted {p.get('request_id', req_id)}")
-            self.show_ok("Ride accepted successfully.")
-        elif rtype == "ERROR":
-            self.lbl_result.setText("Result: error")
-            self.show_error(p.get("message", "Failed to accept ride."))
-        else:
-            self.show_error(f"Unexpected response: {rtype}")
-
 # =============================================================================
 # Ride Page: tabs for Passenger / Driver
 # =============================================================================
@@ -861,8 +800,8 @@ class RidePage(QWidget):
         self.session = session
 
         self.tabs = QTabWidget()
-        self.passenger_page = RideRequestPage(session)
-        self.driver_page = RideDriverPage(session)
+        self.passenger_page = DriverRidePage(session)
+        self.driver_page = DriverRidePage(session)
 
         self.tabs.addTab(self.passenger_page, "Passenger")
         self.tabs.addTab(self.driver_page, "Driver")
@@ -911,17 +850,22 @@ class MainWindow(QMainWindow):
         self.btn_profile = QPushButton("Profile")
         self.btn_sched   = QPushButton("Schedule")
         self.btn_ride    = QPushButton("Ride")
+        self.btn_logout = QPushButton("Logout")
+        
         for b in (self.btn_profile, self.btn_sched, self.btn_ride):
             b.setCheckable(True)
             b.setAutoExclusive(True)
             left_l.addWidget(b)
         left_l.addStretch(1)
 
+        left_l.addWidget(self.btn_logout)
+        self.btn_logout.clicked.connect(self.on_logout)
+
         self.stack = QStackedWidget()
         # placeholders; will be replaced after login
         self.profile_page = title_page("Profile (login required)")
         self.schedule_page = title_page("Your Schedule")
-        self.ride_page = RidePage(self.session)
+        
 
         # index 0 → Profile (placeholder until login)
         self.profile_page = title_page("Profile (login required)")
@@ -998,6 +942,46 @@ class MainWindow(QMainWindow):
             self.ride_page = RideRequestPage(self.session)
 
         self.stack.insertWidget(2, self.ride_page)
+
+    def closeEvent(self, event):
+        """on window close, logout cleanly and close the session"""
+        try:
+            if self.session is not None:
+                req = {
+                    "type": "AUTH.LOGOUT_REQ",
+                    "id": str(uuid.uuid4()),
+                    "payload": {}
+                }
+                try:
+                    # best-effort logout; ignore errors
+                    self.session.request(req)
+                except Exception:
+                    pass
+
+                try:
+                    self.session.close()
+                except Exception:
+                    pass
+        finally:
+            super().closeEvent(event)\
+            
+    def on_logout(self):
+        try:
+            req = {"type": "AUTH.LOGOUT_REQ",
+               "id": str(uuid.uuid4()),
+               "payload": {}}
+            self.session.request(req)
+        except Exception:
+            # If network fails, still locally reset
+            pass
+
+        self.set_schedule_enabled(False)
+        self.root.setCurrentIndex(0)
+        self.btn_profile.setChecked(False)
+        self.btn_sched.setChecked(False)
+        self.btn_ride.setChecked(False)
+
+
 
 
 
