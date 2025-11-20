@@ -834,6 +834,21 @@ def _ride_complete(conn_state, payload, mid):
     _free_driver(driver_id)
     return {"type":"RIDE.COMPLETE_RES", "id":mid, "payload":{}}
 
+def _cancel_active_matches_for_driver(driver_id: int):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE matches SET status='cancelled' "
+            "WHERE driver_id=? AND status='active'",
+            (driver_id,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        logging.exception("cancel_active_matches_for_driver failed")
+
+
 
 
 # ---------------------------------------------------------
@@ -903,11 +918,16 @@ def handle_message(msg: dict, conn_state: dict):
 
     if mtype == "AUTH.LOGOUT_REQ":
         uid = conn_state.get("user_id")
+        if uid is not None:
+            _cancel_active_matches_for_driver(uid)
+            _free_driver(uid)
+
         with STATE_LOCK:
             if uid in ONLINE_DRIVERS:
                 ONLINE_DRIVERS.pop(uid, None)
             if uid in DRIVER_PEERS:
                 DRIVER_PEERS.pop(uid, None)
+
         conn_state["user_id"] = None
         return {"type":"AUTH.LOGOUT_RES", "id":mid, "payload":{
             "message":"Logout Successful"
@@ -1273,7 +1293,8 @@ def client_thread(conn: socket.socket, addr):
             pass
         logging.info("Client disconnected: %s", peer)
         if uid is not None:
-            BUSY_DRIVERS.discard(uid)
+            _cancel_active_matches_for_driver(uid)
+            _free_driver(uid)
             
 
 def serve(host: str, port: int):
