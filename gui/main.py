@@ -4,6 +4,7 @@ import json
 import re
 import socket
 import uuid
+import threading
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
@@ -826,6 +827,9 @@ class MainWindow(QMainWindow):
         # Persistent session (used by login + profile + schedule + ride)
         self.session = JsonlSession(HOST, PORT, SOCKET_TIMEOUT)
 
+        self.p2p_sock = None
+        self.p2p_thread
+
         self.root = QStackedWidget()
         self.setCentralWidget(self.root)
 
@@ -931,6 +935,12 @@ class MainWindow(QMainWindow):
         # enable/disable Schedule tab
         self.set_schedule_enabled(is_driver)
 
+        # P2P listener follows driver mode
+        if is_driver:
+            self.start_p2p_listener()
+        else:
+            self.stop_p2p_listener()
+
         # swap ride page (index 2) between driver/passenger views
         if hasattr(self, "ride_page"):
             self.stack.removeWidget(self.ride_page)
@@ -963,7 +973,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
         finally:
-            super().closeEvent(event)\
+            super().closeEvent(event)
             
     def on_logout(self):
         try:
@@ -980,6 +990,83 @@ class MainWindow(QMainWindow):
         self.btn_profile.setChecked(False)
         self.btn_sched.setChecked(False)
         self.btn_ride.setChecked(False)
+
+    def start_p2p_listener(self):
+        """Start a simple TCP listener for driver P2P and announce it via PEER.OPEN_REQ."""
+        # If already running, do nothing
+        if self.p2p_sock is not None:
+            return
+
+        try:
+            # 1) create listening socket on an ephemeral port
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("0.0.0.0", 0))   # OS chooses port
+            s.listen(1)
+            port = s.getsockname()[1]
+            self.p2p_sock = s
+
+            # 2) tell server where we are listening
+            req = {
+                "type": "PEER.OPEN_REQ",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "p2p_port": port
+                    # we could also send external_ip/external_port if we knew them
+                }
+            }
+            try:
+                resp = self.session.request(req)
+            except Exception as e:
+                # if this fails, just log and shut listener down
+                print(f"PEER.OPEN_REQ failed: {e}")
+                s.close()
+                self.p2p_sock = None
+                return
+
+            if resp.get("type") != "PEER.OPEN_RES":
+                # server rejected; clean up
+                print(f"PEER.OPEN_RES error: {resp}")
+                s.close()
+                self.p2p_sock = None
+                return
+
+            # 3) spin a background thread just to accept connections
+            def _p2p_loop(listener: socket.socket):
+                try:
+                    while True:
+                        conn, addr = listener.accept()
+                        # minimal behavior: immediately close, or print
+                        print(f"P2P connection from {addr}, closing.")
+                        conn.close()
+                except Exception:
+                    # any error → exit thread
+                    pass
+
+            t = threading.Thread(target=_p2p_loop, args=(s,), daemon=True)
+            t.start()
+            self.p2p_thread = t
+
+            print(f"P2P listener started on port {port}")
+
+        except Exception as e:
+            print(f"start_p2p_listener failed: {e}")
+            if self.p2p_sock:
+                self.p2p_sock.close()
+            self.p2p_sock = None
+            self.p2p_thread = None
+
+
+    def stop_p2p_listener(self):
+        """Stop driver P2P listener if running."""
+        if self.p2p_sock is not None:
+            try:
+                self.p2p_sock.close()
+            except Exception:
+                pass
+        self.p2p_sock = None
+        self.p2p_thread = None
+
 
 
 
