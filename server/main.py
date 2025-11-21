@@ -802,6 +802,13 @@ def _ride_accept(conn_state, payload, mid):
         "request_id": f"req_{req_id_int}"
     }}
 
+def _mark_driver_sees_request(request_id: str, driver_id: int):
+    """Record that this driver is eligible to accept this request."""
+    now = time.time()
+    with STATE_LOCK:
+        ACTIVE_REQUEST_DRIVERS.setdefault(request_id, set()).add(driver_id)
+        _REQUEST_LAST_TOUCH[request_id] = now
+
 
 #FREEING THE DRIVER LATER:
 def _free_driver(driver_id: int):
@@ -1154,17 +1161,20 @@ def handle_message(msg: dict, conn_state: dict):
                     continue
 
                 if passenger_id == driver_id:
-                    continue    
+                    continue 
+
+                request_key = f"req_{req_id_int}"   
 
                 items.append(
                     {
-                        "request_id": f"req_{req_id_int}",
+                        "request_id": request_key,
                         "user_id": f"user_{passenger_id}",
                         "area": area,
                         "direction": direction,
                         "time_iso": dep_time,
                     }
                 )
+                _mark_driver_sees_request(request_key, driver_id)
 
             return {
                 "type": "RIDE.LIST_RES",

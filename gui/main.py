@@ -1210,8 +1210,9 @@ class MainWindow(QMainWindow):
             self.ride_page.handle_matched(payload)
     
     def on_request_closed(self, msg: dict):
+        payload = msg.get("payload", {})
         if isinstance(self.ride_page, DriverRidePage):
-            self.ride_page.handle_request_closed("payload", {})
+            self.ride_page.handle_request_closed(payload)
     
     def on_driver_broadcast(self, msg: dict):
         if isinstance(self.ride_page, DriverRidePage):
