@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit
+    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
 
@@ -278,11 +278,11 @@ class JsonlSession(QObject):
 
         mid = env.get("id")
         if not mid:
-            mid = str(uuid.uuid4)
+            mid = str(uuid.uuid4())
             env["id"] = mid
 
         if "payload" not in env or env["payload"] is None:
-            env["paylaod"] = {}
+            env["payload"] = {}
 
         send_json(self.sock, env)
 
@@ -296,7 +296,7 @@ class JsonlSession(QObject):
 
             # Otherwise, treat as push / unsolicited
             t = msg.get("type")
-            if t in ("RIDE.MATCHED", "REQUEST_CLOSED", "DRIVER.BROADCAST"):
+            if t in ("RIDE.MATCHED", "REQUEST.CLOSED", "DRIVER.BROADCAST"):
                 self.handle_push(msg)
                 continue
 
@@ -517,7 +517,7 @@ class ProfileScreen(QWidget):
         self.chk_driver = QCheckBox("Driver Mode")
         self.chk_driver.setChecked(self.snapshot["is_driver"])
 
-        # Stronger style just for the 3 profile fields
+        # Stronger style just for the 3 profile fields bc i cant figure out where you put the styling for them joe T_T
         profile_field_css = """
         QLineEdit#profileField,
         QLineEdit#profileField:disabled,
@@ -586,7 +586,7 @@ class ProfileScreen(QWidget):
         self.btn_save.setEnabled(editing)
         self.btn_cancel.setEnabled(editing)
 
-        self.setStyleSheet("QLineEdit:read-only { background: #f6f6f6; }")
+        
 
     def reset_fields_from_snapshot(self):
         self.in_name.setText(self.snapshot["name"])
@@ -842,6 +842,10 @@ class RideRequestPage(QWidget):
         super().__init__(parent)
         self.session = session
 
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(3000)
+        self.poll_timer.timeout.connect(self._poll_for_match)
+
         self.current_request_id: str | None = None
 
         self.in_area = QLineEdit()
@@ -947,6 +951,7 @@ class RideRequestPage(QWidget):
             
             self.lbl_status.setText(f"Status: open — compatible drivers found: {found}")
             self.show_ok("Ride request created.")
+            self.poll_timer.start()
 
         elif rtype == "ERROR":
             code = p.get("code")
@@ -1005,10 +1010,24 @@ class RideRequestPage(QWidget):
     def handle_matched(self, payload):
         self.lbl_status.setText("Status: A driver has accepted your request!")
         self.btn_cancel.setEnabled(False)
+        try:
+            self.poll_timer.stop()
+        except AttributeError:
+            pass
 
     def set_idle_state(self):
         """Reset the page to 'no active ride request' state."""
         self.current_request_id = None
+
+        try:
+            self.poll_timer.stop()
+        except AttributeError:
+            pass
+
+        try:
+            self.btn_cancel.setEnabled(False)
+        except AttributeError:
+            pass
 
         try:
             self.btn_cancel.setEnabled(False)
@@ -1024,8 +1043,23 @@ class RideRequestPage(QWidget):
             self.lbl_status.setText("No active ride request.")
         except AttributeError:
             pass   
+    
+    def _poll_for_match(self):
+        # Only poll while we have an active request
+        if not self.current_request_id:
+            return
+        try:
+            # PING will generate a PONG, but more importantly,
+            # this will read any pending RIDE.MATCHED pushes
+            req = {"type": "PING", "id": str(uuid.uuid4()), "payload": {}}
+            self.session.request(req)
+        except Exception as e:
+            # Optional: you can show a soft warning or just ignore
+            print(f"poll_for_match error: {e}")
+
 
 class DriverRidePage(QWidget):
+    rideAccepted = pyqtSignal(str, dict)  # emit request_id when a ride is accepted
     def __init__(self, session: JsonlSession, parent=None):
         super().__init__(parent)
         self.session = session
@@ -1156,11 +1190,12 @@ class DriverRidePage(QWidget):
             self.show_ok(f"Accepted {req_id}.")
             self.table.clearSelection()
             self.refresh()
+            self.rideAccepted.emit(req_id, payload)
         elif rtype == "ERROR":
             code = payload.get("code")
             msg = payload.get("message", "Failed to accept request.")
 
-            if code == "REQUEST_CLOSED":
+            if code == "REQUEST.CLOSED":
                 msg = "This request is no longer available (cancelled, matched, or expired)"
             
             self.show_error(msg)
@@ -1175,6 +1210,68 @@ class DriverRidePage(QWidget):
     
     def add_broadcast(self, payload):
         self.refresh()
+
+class CurrentRidePage(QWidget):
+    def __init__(self, session, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        v = QVBoxLayout(self)
+
+        self.info_label = QLabel("No active ride")
+        v.addWidget(self.info_label)
+
+        self.chat_box = QTextEdit()
+        self.chat_box.setReadOnly(True)
+        v.addWidget(self.chat_box, 1)
+
+        self.chat_input = QLineEdit()
+        self.chat_input.setPlaceholderText("Type a message (dummy)...")
+        v.addWidget(self.chat_input)
+
+        h = QHBoxLayout()
+        self.send_btn = QPushButton("Send (dummy)")
+        self.complete_btn = QPushButton("Complete Ride")
+        h.addWidget(self.send_btn)
+        h.addWidget(self.complete_btn)
+        v.addLayout(h)
+
+        # hide complete button by default (passenger)
+        self.complete_btn.hide()
+
+        # dummy chat
+        self.send_btn.clicked.connect(self.add_dummy_message)
+
+    def add_dummy_message(self):
+        msg = self.chat_input.text().strip()
+        if msg:
+            self.chat_box.append(f"You: {msg}")
+            self.chat_input.clear()
+
+    def load_for_driver(self, match_payload):
+        """
+        Called when driver receives a MATCH notification
+        """
+        p = match_payload.get("passenger_info", {})
+        passenger_name = p.get("name", "Passenger")
+        driver_name = match_payload.get("driver_info", {}).get("name", "Driver")
+        self.info_label.setText(f"Passenger matched! Ride with passenger: {passenger_name}")
+        self.complete_btn.show()
+
+    def load_for_passenger(self, payload):
+        """
+        Called when passenger receives MATCH notification
+        """
+        d = payload.get("driver_info", {})
+        name = d.get("name", "Driver")
+        model = d.get("vehicle_model", "Unknown")
+        color = d.get("vehicle_color", "Unknown")
+        plate = d.get("vehicle_plate", "Unknown")
+
+        self.info_label.setText(
+            f"Driver matched!\nName: {name}\nCar: {model} ({color})\nPlate: {plate}"
+        )
+        self.complete_btn.hide()
 
 
 # =============================================================================
@@ -1194,24 +1291,26 @@ class MainWindow(QMainWindow):
         self.p2p_sock = None
         self.p2p_thread = None
 
+        self.active_request_id = None
+
         self.root = QStackedWidget()
         self.setCentralWidget(self.root)
 
         # ---- Auth Page ----
-        auth_page = QWidget()
-        v_auth = QVBoxLayout(auth_page)
+        self.auth_page = QWidget()
+        v_auth = QVBoxLayout(self.auth_page)
         tabs = QTabWidget()
         self.login_tab = LoginForm(self.session)
         self.register_tab = RegisterForm()
         tabs.addTab(self.login_tab, "Login")
         tabs.addTab(self.register_tab, "Register")
         v_auth.addWidget(tabs, 1)
-        self.root.addWidget(auth_page)
+        self.root.addWidget(self.auth_page)
 
         # ---- App Page ----
-        app_page = QWidget()
-        self.root.addWidget(app_page)
-        h = QHBoxLayout(app_page)
+        self.app_page = QWidget()
+        self.root.addWidget(self.app_page)
+        h = QHBoxLayout(self.app_page)
 
         left = QWidget()
         left.setObjectName("SideBar")
@@ -1219,42 +1318,46 @@ class MainWindow(QMainWindow):
         self.btn_profile = QPushButton("Profile")
         self.btn_sched   = QPushButton("Schedule")
         self.btn_ride    = QPushButton("Ride")
+        self.btn_current = QPushButton("Current Ride")
         self.btn_logout = QPushButton("Logout")
         
-        for b in (self.btn_profile, self.btn_sched, self.btn_ride):
+        for b in (self.btn_profile, self.btn_sched, self.btn_ride, self.btn_current):
             b.setCheckable(True)
             b.setAutoExclusive(True)
             left_l.addWidget(b)
         left_l.addStretch(1)
 
+        
+
         left_l.addWidget(self.btn_logout)
         self.btn_logout.clicked.connect(self.on_logout)
 
-        self.stack = QStackedWidget()
-        # placeholders; will be replaced after login
-        self.profile_page = title_page("Profile (login required)")
-        self.schedule_page = title_page("Your Schedule")
         
 
-        # index 0 → Profile (placeholder until login)
+        self.stack = QStackedWidget()
+
+        
         self.profile_page = title_page("Profile (login required)")
-        self.stack.addWidget(self.profile_page)              # index 0
+        self.stack.addWidget(self.profile_page)
 
-        # index 1 → Schedule (placeholder until login)
         self.schedule_page = title_page("Your Schedule")
-        self.stack.addWidget(self.schedule_page)             # index 1
+        self.stack.addWidget(self.schedule_page)
 
-        # index 2 → Ride (placeholder, will be swapped later)
         self.ride_page = RideRequestPage(self.session)
-        self.stack.addWidget(self.ride_page)                 # index 2
+        self.stack.addWidget(self.ride_page)
 
-        self.btn_profile.clicked.connect(lambda: self.stack.setCurrentIndex(0))
-        self.btn_sched.clicked.connect(lambda: self.stack.setCurrentIndex(1))
-        self.btn_ride.clicked.connect(lambda: self.stack.setCurrentIndex(2))
+        self.current_ride_page = CurrentRidePage(self.session)
+        self.stack.addWidget(self.current_ride_page)
+        self.current_ride_page.complete_btn.clicked.connect(self.complete_ride)
 
+        self.btn_profile.clicked.connect(lambda: self.stack.setCurrentWidget(self.profile_page))
+        self.btn_sched.clicked.connect(lambda: self.stack.setCurrentWidget(self.schedule_page))
+        self.btn_ride.clicked.connect(lambda: self.stack.setCurrentWidget(self.ride_page))
+        self.btn_current.clicked.connect(lambda: self.stack.setCurrentWidget(self.current_ride_page))
+
+        self.btn_current.setEnabled(False)
         self.btn_profile.setChecked(True)
-        self.stack.setCurrentIndex(0)
-
+        self.stack.setCurrentWidget(self.profile_page)
         
         center = QWidget()
         center_layout = QVBoxLayout(center)
@@ -1275,30 +1378,31 @@ class MainWindow(QMainWindow):
             self.schedule_page.setEnabled(bool(on))
 
     def after_login(self, user_preview: dict):
+        self.user_preview = user_preview
         # Profile screen
         profile = ProfileScreen(self.session, user_preview)
         profile.driverModeChanged.connect(self.on_driver_mode_changed)
 
-        # replace profile page at index 0
+        
         self.stack.removeWidget(self.profile_page)
         self.profile_page.deleteLater()
         self.profile_page = profile
         self.stack.insertWidget(0, self.profile_page)
 
-        # replace schedule page at index 1
+        
         self.stack.removeWidget(self.schedule_page)
         self.schedule_page.deleteLater()
         self.schedule_page = ScheduleScreen(self.session)
         self.stack.insertWidget(1, self.schedule_page)
 
-        # initial driver mode from server
+        
         is_driver = bool(user_preview.get("is_driver", False))
         self.on_driver_mode_changed(is_driver)
 
-        # switch to app
-        self.root.setCurrentIndex(1)
+        self.root.setCurrentWidget(self.app_page)
+        self.stack.setCurrentWidget(self.profile_page)
         self.btn_profile.setChecked(True)
-        self.stack.setCurrentIndex(0)
+        
 
 
     def on_driver_mode_changed(self, is_driver: bool):
@@ -1318,10 +1422,11 @@ class MainWindow(QMainWindow):
 
         if is_driver:
             self.ride_page = DriverRidePage(self.session)
+            self.ride_page.rideAccepted.connect(self.on_driver_ride_accepted)
         else:
             self.ride_page = RideRequestPage(self.session)
 
-        self.stack.insertWidget(2, self.ride_page)
+        self.stack.addWidget(self.ride_page)
 
     def closeEvent(self, event):
         """on window close, logout cleanly and close the session"""
@@ -1362,10 +1467,12 @@ class MainWindow(QMainWindow):
             self.ride_page.timer.stop()  # stop auto-refresh timer
 
         self.set_schedule_enabled(False)
-        self.root.setCurrentIndex(0)
+        self.root.setCurrentWidget(self.auth_page)
         self.btn_profile.setChecked(False)
         self.btn_sched.setChecked(False)
         self.btn_ride.setChecked(False)
+        self.btn_current.setEnabled(False)
+        self.stack.setCurrentWidget(self.profile_page)
 
     def start_p2p_listener(self):
         """Start a simple TCP listener for driver P2P and announce it via PEER.OPEN_REQ."""
@@ -1445,11 +1552,27 @@ class MainWindow(QMainWindow):
     
     def on_push_received(self, msg: dict):
         t = msg.get("type")
+        payload = msg.get("payload", {})
 
         if t == "RIDE.MATCHED":
-            self.on_ride_matched(msg)
+            self.btn_ride.setEnabled(False)
+            self.btn_current.setEnabled(True)
+
+            self.btn_current.setChecked(True)
+            self.stack.setCurrentWidget(self.current_ride_page)
+
+            req_id = payload.get("request_id")
+            if req_id is None and isinstance(self.ride_page, RideRequestPage):
+                req_id = self.ride_page.current_request_id
+            
+            self.active_request_id = req_id
+            if self.user_preview.get("is_driver"):
+                self.current_ride_page.load_for_driver(payload)
+            else:
+                self.current_ride_page.load_for_passenger(payload)
+                self.on_ride_matched(msg)
         
-        elif t == "REQUEST_CLOSED":
+        elif t == "REQUEST.CLOSED":
             self.on_request_closed(msg)
         
         elif t == "DRIVER.BROADCAST":
@@ -1461,14 +1584,79 @@ class MainWindow(QMainWindow):
             self.ride_page.handle_matched(payload)
     
     def on_request_closed(self, msg: dict):
+        """Called when server notifies that a ride was closed"""
         payload = msg.get("payload", {})
         if isinstance(self.ride_page, DriverRidePage):
             self.ride_page.handle_request_closed(payload)
+
+        if isinstance(self.ride_page, RideRequestPage):
+        # reset the passenger's request form state
+            self.ride_page.set_idle_state()
+
+        try:
+            self.btn_current.setEnabled(False)
+            self.btn_ride.setEnabled(True)
+            self.btn_ride.setChecked(True)
+            self.stack.setCurrentWidget(self.ride_page)
+            if hasattr(self, "current_ride_page"):
+                self.current_ride_page.chat_box.clear()
+                self.current_ride_page.info_label.setText("No active ride")
+        except AttributeError:
+            pass
     
     def on_driver_broadcast(self, msg: dict):
         if isinstance(self.ride_page, DriverRidePage):
             self.ride_page.add_broadcast(msg.get("payload", {}))
     
+    def complete_ride(self):
+        # DRIVER ONLY
+        payload = {"request_id": self.active_request_id}   # store this on match
+        res = self.session.request({"type": "RIDE.COMPLETE_REQ", "payload": payload})
+        if res["type"] == "RIDE.COMPLETE_RES":
+            QMessageBox.information(self, "Ride Completed", "Ride successfully completed.")
+            self.return_to_idle_state()
+    
+    def return_to_idle_state(self):
+        # driver or passenger
+
+        # Disable current ride
+        self.btn_current.setEnabled(False)
+
+        # Enable ride
+        self.btn_ride.setEnabled(True)
+        self.btn_ride.setChecked(True)
+
+
+        # Switch back to ride page
+        self.stack.setCurrentWidget(self.ride_page)
+        self.active_request_id = None
+
+        # clear chat/info
+        self.current_ride_page.chat_box.clear()
+        self.current_ride_page.info_label.setText("No active ride")
+
+    def on_driver_ride_accepted(self, request_id: str, payload: dict):
+        """
+        Called when THIS driver accepts a ride successfully.
+        We immediately go into 'current ride' state for the driver.
+        """
+        # Disable ride tab, enable Current Ride tab
+        self.btn_ride.setEnabled(False)
+        self.btn_current.setEnabled(True)
+
+        # Switch UI to Current Ride
+        self.btn_current.setChecked(True)
+        self.stack.setCurrentWidget(self.current_ride_page)
+
+        # Remember which request this ride is for (used by complete_ride)
+        self.active_request_id = request_id
+
+        # Build a payload compatible with load_for_driver
+        match_payload = dict(payload)
+        match_payload.setdefault("request_id", request_id)
+
+        self.current_ride_page.load_for_driver(match_payload)
+
 
 
 
