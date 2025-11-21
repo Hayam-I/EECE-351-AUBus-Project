@@ -1,5 +1,3 @@
-"this is it"
-
 #!/usr/bin/env python3
 """
 AUBus – Server
@@ -67,6 +65,8 @@ REQUEST_TTL_SECONDS = 120
 
 REQUEST_PASSENGERS: dict[str, dict] = {}
 DRIVER_PEERS: dict[int, tuple[str,int]] = {}
+
+STATE_LOCK = threading.Lock()
 
 
 # ---------------------------
@@ -342,6 +342,8 @@ def require_driver(conn_state, mid):
         logging.exception("require_driver failed")
         return None, {"type": "ERROR", "id": mid,
                       "payload": {"code": "SERVER_ERROR", "message": "Internal error"}}
+
+#time/location helpers
 def _minutes_from_hhmm(s: str) -> int:
     hh, mm = s.split(":")
     return int(hh) * 60 + int(mm)
@@ -352,6 +354,9 @@ def _minutes_from_iso(iso_s: str) -> tuple[int, int]:
     sun0 = (py_wd + 1) % 7
     minutes = dt.hour * 60 + dt.minute
     return sun0, minutes
+
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
 #going from req_123 -> 123
 def _reqid_to_int(req_id: str) -> int | None:
@@ -537,7 +542,7 @@ def profile_get(current_user_id: int, payload: dict, mid):
         conn = sqlite3.connect(DB_PATH)
         cur  = conn.cursor()
         cur.execute(
-            "SELECT user_id,name,username,password,email,is_driver,area,rating_sum,rating_avg,rating_count"
+            "SELECT user_id,name,username,password,email,is_driver,area,rating_sum,rating_avg,rating_count "
             "FROM users WHERE user_id=?",
             (target_uid,),
         )
@@ -666,11 +671,12 @@ def schedule_remove(conn_state, payload, mid):
 #--------------
 def _gc_requests():
     now = time.time()
-    for req_id, ts in list(_REQUEST_LAST_TOUCH.items()):
-        if now - ts > REQUEST_TTL_SECONDS:
-            ACTIVE_REQUEST_DRIVERS.pop(req_id, None)
-            _REQUEST_LAST_TOUCH.pop(req_id, None)
-            REQUEST_PASSENGERS.pop(req_id, None)
+    with STATE_LOCK:
+        for req_id, ts in list(_REQUEST_LAST_TOUCH.items()):
+            if now - ts > REQUEST_TTL_SECONDS:
+                ACTIVE_REQUEST_DRIVERS.pop(req_id, None)
+                _REQUEST_LAST_TOUCH.pop(req_id, None)
+                REQUEST_PASSENGERS.pop(req_id, None)
 
 def _driver_info_preview(uid: int):
     """
@@ -736,14 +742,14 @@ def _driver_info_preview(uid: int):
         conn.close()
 
         return {
-            "user_id": user_id,
+            "user_id": f"user_{user_id}",
             "name": name,
             "username": username,
             "email": email,
             "is_driver": bool(is_driver),
             "area": area,
             "rating_sum": rating_sum,
-            "rating_avg": rating_avg,
+            "rating_avg": float(rating_avg) if rating_avg is not None else 0.0,
             "rating_count": rating_count,
             "vehicle": vehicle,
         }
@@ -757,41 +763,56 @@ def _driver_info_preview(uid: int):
 
 
 def _broadcast_driver_candidates(request_id: str, passenger_preview: dict, candidate_user_ids: list[int]):
-    ACTIVE_REQUEST_DRIVERS.setdefault(request_id, set())
     now = time.time()
     sent = 0
-    for uid in candidate_user_ids:
-        # Allow driver to have multiple active matches
-        # (no BUSY_DRIVERS / _driver_has_active_match filter)
-        sock = ONLINE_DRIVERS.get(uid)
-        if not sock:
-            continue
+    targets: list[tuple[socket.socket, dict]] = []
+
+    with STATE_LOCK:
+        ACTIVE_REQUEST_DRIVERS.setdefault(request_id, set())
+        for uid in candidate_user_ids:
+            if uid in BUSY_DRIVERS or _driver_has_active_match(uid):
+                continue
+            sock = ONLINE_DRIVERS.get(uid)
+            if not sock:
+                continue
+            ACTIVE_REQUEST_DRIVERS[request_id].add(uid)
+            # stash target to send outside the lock
+            targets.append((sock, {
+                "type": "DRIVER.BROADCAST",
+                "id": _uuid(),
+                "payload": {
+                    "request_id": request_id,
+                    "passenger_preview": passenger_preview,
+                },
+            }))
+            sent += 1
+        _REQUEST_LAST_TOUCH[request_id] = now
+
+    # Do network I/O without holding the lock
+    for sock, msg in targets:
+        _send_json_safe(sock, msg)
+
+    return sent
+
+
+def _notify_request_closed(request_id: str, winner_uid: int, remaining: set[int]):
+    targets = []
+    with STATE_LOCK:
+        for uid in list(remaining):
+            sock = ONLINE_DRIVERS.get(uid)
+            if sock:
+                targets.append(sock)
+
+    for sock in targets:
         _send_json_safe(sock, {
-            "type": "DRIVER.BROADCAST",
+            "type": "REQUEST.CLOSED",
             "id": _uuid(),
             "payload": {
                 "request_id": request_id,
-                "passenger_preview": passenger_preview
-            }
+                "winner_user_id": f"user_{winner_uid}",
+            },
         })
-        ACTIVE_REQUEST_DRIVERS[request_id].add(uid)
-        sent += 1
-    _REQUEST_LAST_TOUCH[request_id] = now
-    return sent
 
-def _notify_request_closed(request_id: str, winner_uid: int, remaining: set[int]):
-    for uid in list(remaining):
-        sock = ONLINE_DRIVERS.get(uid)
-        if not sock:
-            continue
-        _send_json_safe(sock, {
-            "type":"REQUEST.CLOSED",
-            "id":_uuid(),
-            "payload":{
-                "request_id":request_id,
-                "winner_user_id":f"user_{winner_uid}"
-            }
-        })
 def _driver_has_active_match(driver_id: int) -> bool:
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -801,16 +822,9 @@ def _driver_has_active_match(driver_id: int) -> bool:
         conn.close()
         return bool(row)
     except Exception:
-        logging.exception("_driver_has_aactive_match failed")
+        logging.exception("_driver_has_active_match failed")
         return True
         
-def _reqid_to_int(req_id: str) -> int | None:
-    if isinstance(req_id, str) and req_id.startswith("req_"):
-        try:
-            return int(req_id.split("_",1)[1])
-        except ValueError:
-            return None
-    return None
 
 def _ride_accept(conn_state, payload, mid):
     driver_id, err = require_logged_in(conn_state, mid)
@@ -827,6 +841,18 @@ def _ride_accept(conn_state, payload, mid):
             "code":"BAD_REQUEST",
             "message":"invalid request_id"
         }}
+    with STATE_LOCK:
+        busy_now = driver_id in BUSY_DRIVERS
+
+    if busy_now or _driver_has_active_match(driver_id):
+        return {"type":"ERROR", "id":mid, "payload":{
+            "code":"DRIVER_BUSY",
+            "message":"Driver already has an active match"
+        }}
+    
+    if time.time() - _REQUEST_LAST_TOUCH.get(f"req_{req_id_int}", 0) > REQUEST_TTL_SECONDS:
+        return {"type":"ERROR","id":mid,"payload":{"code":"REQUEST_EXPIRED","message":"request expired"}}
+    
 
     conn = None
     try:
@@ -850,9 +876,17 @@ def _ride_accept(conn_state, payload, mid):
                 "code":"REQUEST_CLOSED",
                 "message":"request not open"
             }}
+        
+        if driver_id == passenger_id:
+            return {"type":"ERROR","id":mid,"payload":{"code":"BAD_REQUEST","message":"cannot accept your own request"}}
+
 
         # 2) Resolve driver's reachable endpoint from DRIVER_PEERS
-        driver_ip, driver_port = DRIVER_PEERS.get(driver_id, (None, None))
+        with STATE_LOCK:
+            driver_ip, driver_port = DRIVER_PEERS.get(driver_id, (None, None))
+
+        if driver_id not in ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()):
+            return {"type":"ERROR","id":mid,"payload":{"code":"FORBIDDEN","message":"not eligible for this request"}}
 
         # 3) Insert match row and mark request matched (transactionally)
         cur.execute("""
@@ -898,6 +932,10 @@ def _ride_accept(conn_state, payload, mid):
             "code":"SERVER_ERROR", "message":"Internal Error"
         }}
 
+    # 4) Post-commit side effects: mark driver busy, log, notify passenger once, close others
+    with STATE_LOCK:
+        BUSY_DRIVERS.add(driver_id)
+
     logging.info(
         "BOOTSTRAP match: req_%s passenger user_%s <- driver user_%s at %s:%s",
         req_id_int, passenger_id, driver_id, driver_ip, driver_port
@@ -919,62 +957,34 @@ def _ride_accept(conn_state, payload, mid):
         })
 
     # Notify remaining drivers that this request is closed
-    remaining = ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()).copy()
-    if driver_id in remaining:
-        remaining.remove(driver_id)
+    with STATE_LOCK:
+        remaining = ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()).copy()
+        if driver_id in remaining:
+            remaining.remove(driver_id)
     _notify_request_closed(f"req_{req_id_int}", driver_id, remaining)
 
     # Cleanup request bookkeeping
-    ACTIVE_REQUEST_DRIVERS.pop(f"req_{req_id_int}", None)
-    _REQUEST_LAST_TOUCH.pop(f"req_{req_id_int}", None)
-    REQUEST_PASSENGERS.pop(f"req_{req_id_int}", None)
+    with STATE_LOCK:
+        ACTIVE_REQUEST_DRIVERS.pop(f"req_{req_id_int}", None)
+        _REQUEST_LAST_TOUCH.pop(f"req_{req_id_int}", None)
+        REQUEST_PASSENGERS.pop(f"req_{req_id_int}", None)
 
     return {"type":"RIDE.ACCEPT_RES", "id":mid, "payload":{
         "request_id": f"req_{req_id_int}"
     }}
 
-def _driver_matches_list(driver_id: int, mid):
-    """Return all active matches for this driver."""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT request_id, user_id, area, direction, departure_time, status
-            FROM matches
-            WHERE driver_id=? AND status='active'
-            ORDER BY accepted_at DESC
-        """, (driver_id,))
-        rows = cur.fetchall()
-        conn.close()
-    except Exception:
-        logging.exception("_driver_matches_list failed")
-        return {
-            "type": "ERROR",
-            "id": mid,
-            "payload": {"code": "SERVER_ERROR", "message": "Failed to list matches"},
-        }
-
-    items = []
-    for req_id_int, passenger_id, area, direction, departure_time, status in rows:
-        items.append({
-            "request_id": f"req_{req_id_int}",
-            "passenger_user_id": f"user_{passenger_id}",
-            "area": area,
-            "direction": direction,
-            "time_iso": departure_time,
-            "status": status,
-        })
-
-    return {
-        "type": "RIDE.DRIVER_MATCHES_RES",
-        "id": mid,
-        "payload": {"items": items},
-    }
+def _mark_driver_sees_request(request_id: str, driver_id: int):
+    """Record that this driver is eligible to accept this request."""
+    now = time.time()
+    with STATE_LOCK:
+        ACTIVE_REQUEST_DRIVERS.setdefault(request_id, set()).add(driver_id)
+        _REQUEST_LAST_TOUCH[request_id] = now
 
 
 #FREEING THE DRIVER LATER:
 def _free_driver(driver_id: int):
-    BUSY_DRIVERS.discard(driver_id)
+    with STATE_LOCK:
+        BUSY_DRIVERS.discard(driver_id)
 
 def _ride_complete(conn_state, payload, mid):
     driver_id, err = require_logged_in(conn_state, mid)
@@ -991,6 +1001,11 @@ def _ride_complete(conn_state, payload, mid):
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("UPDATE matches SET status='completed' WHERE request_id=? AND driver_id=?", (req_id_int, driver_id))
+        cur.execute(
+        "UPDATE ride_req SET status='completed' WHERE request_id=?",
+        (req_id_int,)
+        )
+
         conn.commit()
         conn.close()
     except Exception:
@@ -1001,6 +1016,43 @@ def _ride_complete(conn_state, payload, mid):
         }}
     _free_driver(driver_id)
     return {"type":"RIDE.COMPLETE_RES", "id":mid, "payload":{}}
+
+def _cancel_active_matches_for_driver(driver_id: int):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE matches SET status='cancelled' "
+            "WHERE driver_id=? AND status='active'",
+            (driver_id,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        logging.exception("cancel_active_matches_for_driver failed")
+
+#this is to stop users from making requests if they have a request whose status is open/matched
+def _passenger_has_active_request(user_id: int) -> bool:
+    """
+    Returns True if this passenger already has an active ride request
+    (status = 'open' or 'matched'), False otherwise.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+        "SELECT 1 FROM ride_req WHERE user_id=? AND status IN ('open','matched') LIMIT 1",
+        (user_id,),
+    )
+
+
+        row = cur.fetchone()
+        conn.close()
+        return bool(row)
+    except Exception:
+        logging.exception("_passenger_has_active_request failed")
+        # Fail-closed: safest is to treat as 'has active' so we don't break invariants
+        return True
 
 
 
@@ -1048,19 +1100,21 @@ def handle_message(msg: dict, conn_state: dict):
             user_preview = res["user"]
 
             if user_preview.get("is_driver"):
+                with STATE_LOCK:
                 
-                ONLINE_DRIVERS[uid] = conn_state.get("sock")
+                    ONLINE_DRIVERS[uid] = conn_state.get("sock")
 
-                ip = conn_state["peer"][0] if conn_state.get("peer") else None
+                    ip = conn_state["peer"][0] if conn_state.get("peer") else None
 
 
-                old = DRIVER_PEERS.get(uid)
-                peer_port = old[1] if old else None
+                    old = DRIVER_PEERS.get(uid)
+                    peer_port = old[1] if old else None
 
-                DRIVER_PEERS[uid] = (ip, peer_port)
+                    DRIVER_PEERS[uid] = (ip, peer_port)
             else:
-                ONLINE_DRIVERS.pop(uid, None)
-                DRIVER_PEERS.pop(uid, None)
+                with STATE_LOCK:
+                    ONLINE_DRIVERS.pop(uid, None)
+                    DRIVER_PEERS.pop(uid, None)
 
             return {"type": "AUTH.LOGIN_RES", "id": mid, "payload": {"user": user_preview}}
         else:
@@ -1069,10 +1123,16 @@ def handle_message(msg: dict, conn_state: dict):
 
     if mtype == "AUTH.LOGOUT_REQ":
         uid = conn_state.get("user_id")
-        if uid in ONLINE_DRIVERS:
-            ONLINE_DRIVERS.pop(uid, None)
-        if uid in DRIVER_PEERS:
-            DRIVER_PEERS.pop(uid, None)
+        if uid is not None:
+            _cancel_active_matches_for_driver(uid)
+            _free_driver(uid)
+
+        with STATE_LOCK:
+            if uid in ONLINE_DRIVERS:
+                ONLINE_DRIVERS.pop(uid, None)
+            if uid in DRIVER_PEERS:
+                DRIVER_PEERS.pop(uid, None)
+
         conn_state["user_id"] = None
         return {"type":"AUTH.LOGOUT_RES", "id":mid, "payload":{
             "message":"Logout Successful"
@@ -1083,14 +1143,17 @@ def handle_message(msg: dict, conn_state: dict):
         resp = profile_set(conn_state.get("user_id"), payload, mid)
         if resp.get("type") == "PROFILE.SET_RES" and isinstance(payload, dict) and "is_driver" in payload:
             uid = conn_state.get("user_id")
-            if payload.get("is_driver"):
-                ONLINE_DRIVERS[uid] = conn_state.get("sock")
-                ip = conn_state["peer"][0] if conn_state.get("peer") else None
-                old = DRIVER_PEERS.get(uid)
-                DRIVER_PEERS[uid] = (ip, old[1] if old else None)
-            else:
-                ONLINE_DRIVERS.pop(uid, None)
-                DRIVER_PEERS.pop(uid, None)
+            if uid is not None:
+                if payload.get("is_driver"):
+                    with STATE_LOCK:
+                        ONLINE_DRIVERS[uid] = conn_state.get("sock")
+                        ip = conn_state["peer"][0] if conn_state.get("peer") else None
+                        old = DRIVER_PEERS.get(uid)
+                        DRIVER_PEERS[uid] = (ip, old[1] if old else None)
+                else:
+                    with STATE_LOCK:
+                        ONLINE_DRIVERS.pop(uid, None)
+                        DRIVER_PEERS.pop(uid, None)
         return resp
 
     if mtype == "PROFILE.GET_REQ":
@@ -1123,7 +1186,7 @@ def handle_message(msg: dict, conn_state: dict):
         if direction not in ("to_AUB", "from_AUB"):
            return {"type":"ERROR", "id":mid, "payload":{
                 "code":"BAD_REQUEST",
-                "message":"direction must be to and from AUB"
+                "message":"direction must be 'to_AUB' and 'from_AUB'"
             }}
         if not isinstance(time_iso, str) or not time_iso.strip():
             return {"type":"ERROR", "id":mid, "payload":{
@@ -1137,6 +1200,17 @@ def handle_message(msg: dict, conn_state: dict):
                 "code":"BAD_REQUEST",
                 "message":"time_iso must be valid ISO"
             }}
+                # NEW: enforce at most one active request per passenger
+        if _passenger_has_active_request(uid):
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "PASSENGER_BUSY",
+                    "message": "You already have an active ride request. Please cancel or complete it before creating a new one.",
+                },
+            }
+
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
@@ -1173,6 +1247,7 @@ def handle_message(msg: dict, conn_state: dict):
                         candidate_ids.append(int(driver_id))
                 except Exception:
                     pass
+            candidate_ids = [d for d in candidate_ids if d != uid] 
 
             passenger_preview = {
                 "user_id": f"user_{uid}",
@@ -1183,10 +1258,12 @@ def handle_message(msg: dict, conn_state: dict):
             }
 
             # remember passenger socket so we can notify upon match
-            REQUEST_PASSENGERS[request_id] = {
-                "user_id": uid,
-                "sock": conn_state.get("sock"),
-            }
+            with STATE_LOCK:
+                REQUEST_PASSENGERS[request_id] = {
+                    "user_id": uid,
+                    "sock": conn_state.get("sock"),
+                }
+
 
             sent = _broadcast_driver_candidates(request_id, passenger_preview, candidate_ids)
 
@@ -1264,15 +1341,21 @@ def handle_message(msg: dict, conn_state: dict):
                 if not compatible:
                     continue
 
+                if passenger_id == driver_id:
+                    continue 
+
+                request_key = f"req_{req_id_int}"   
+
                 items.append(
                     {
-                        "request_id": f"req_{req_id_int}",
+                        "request_id": request_key,
                         "user_id": f"user_{passenger_id}",
                         "area": area,
                         "direction": direction,
                         "time_iso": dep_time,
                     }
                 )
+                _mark_driver_sees_request(request_key, driver_id)
 
             return {
                 "type": "RIDE.LIST_RES",
@@ -1294,115 +1377,136 @@ def handle_message(msg: dict, conn_state: dict):
     if mtype == "RIDE.ACCEPT_REQ":
         return _ride_accept(conn_state, payload, mid)
     
-    if mtype == "RIDE.DRIVER_OPEN_REQS_REQ":
-        driver_id, err = require_logged_in(conn_state, mid)
+    if mtype == "DRIVER.RESPONSE_REQ":
+        uid, err = require_logged_in(conn_state, mid)
+        if err: return err
+        _ok, derr = require_driver(conn_state, mid)
+        if derr: return derr
+
+        decision = (payload or {}).get("decision")
+        req_id = (payload or {}).get("request_id")
+
+        if decision not in ("accept", "reject"):
+            return {"type":"ERROR","id":mid,"payload":{"code":"BAD_REQUEST","message":"decision must be 'accept' or 'reject'"}}
+
+        if decision == "reject":
+            # optional: record a decline; then respond
+            return {"type":"DRIVER.RESPONSE_RES","id":mid,"payload":{"status":"declined"}}
+
+        # accept path: reuse your existing logic
+        r = _ride_accept(conn_state, {"request_id": req_id}, mid)
+        if r.get("type") == "RIDE.ACCEPT_RES":
+            return {"type":"DRIVER.RESPONSE_RES","id":mid,"payload":{"status":"accepted","request_id": r["payload"]["request_id"]}}
+        else:
+            # translate server error into RESPONSE_RES or forward the ERROR directly
+            if r.get("type") == "ERROR":
+                return r
+            return {"type":"ERROR","id":mid,"payload":{"code":"SERVER_ERROR","message":"accept failed"}}
+    
+    if mtype == "RIDE.CANCEL_REQ":
+        uid, err = require_logged_in(conn_state, mid)
         if err:
             return err
 
-        # make sure this user is a driver
-        _ok, derr = require_driver(conn_state, mid)
-        if derr:
-            return derr
+        p = payload or {}
+        req_id = p.get("request_id")
+        if not isinstance(req_id, str) or not req_id.startswith("req_"):
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "BAD_REQUEST",
+                    "message": "request_id must be like 'req_<int>'",
+                },
+            }
+        try:
+            req_id_int = int(req_id.split("_", 1)[1])
+        except Exception:
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "BAD_REQUEST",
+                    "message": "invalid request_id",
+                },
+            }
 
+        # Load request
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
-
-            # 1) get all schedules for this driver
-            cur.execute("""
-                SELECT weekday, depart_time, area, direction
-                FROM schedules
-                WHERE user_id=?
-            """, (driver_id,))
-            schedules = cur.fetchall()
-
-            if not schedules:
+            cur.execute(
+                "SELECT user_id, status FROM ride_req WHERE request_id=?",
+                (req_id_int,),
+            )
+            row = cur.fetchone()
+            if not row:
                 conn.close()
                 return {
-                    "type": "RIDE.DRIVER_OPEN_REQS_RES",
+                    "type": "ERROR",
                     "id": mid,
-                    "payload": {"items": []}
+                    "payload": {
+                        "code": "NOT_FOUND",
+                        "message": "Request not found",
+                    },
+                }
+            passenger_id, status = row
+
+            # Only creator can cancel
+            if passenger_id != uid:
+                conn.close()
+                return {
+                    "type": "ERROR",
+                    "id": mid,
+                    "payload": {
+                        "code": "FORBIDDEN",
+                        "message": "You can only cancel your own requests",
+                    },
                 }
 
-            # Build a list of open requests compatible with ANY of the schedules
-            items = []
-            CUTOFF = 30  # minutes window
+            # For simplicity, allow cancel only while still open
+            if status != "open":
+                conn.close()
+                return {
+                    "type": "ERROR",
+                    "id": mid,
+                    "payload": {
+                        "code": "INVALID_STATE",
+                        "message": "Only open requests can be cancelled",
+                    },
+                }
 
-            # For simplicity, fetch all open ride_req rows, then filter in Python
-            cur.execute("""
-                SELECT request_id, user_id, area, direction, departure_time, status
-                FROM ride_req
-                WHERE status='open'
-            """)
-            req_rows = cur.fetchall()
-
-            for (req_id_int, passenger_id, req_area, req_dir, req_time_iso, status) in req_rows:
-                try:
-                    # parse request time -> weekday + minutes
-                    weekday_sun0, req_minutes = _minutes_from_iso(req_time_iso)
-                except Exception:
-                    continue
-
-                # check against each driver schedule
-                compatible = False
-                for (sch_wd, sch_time, sch_area, sch_dir) in schedules:
-                    if sch_dir != req_dir:
-                        continue
-                    # area case-insensitive
-                    if sch_area.strip().lower() != (req_area or "").strip().lower():
-                        continue
-                    # weekday must match
-                    if sch_wd != weekday_sun0:
-                        continue
-                    # time within ± CUTOFF
-                    try:
-                        sch_minutes = _minutes_from_hhmm(sch_time)
-                    except Exception:
-                        continue
-                    if abs(sch_minutes - req_minutes) <= CUTOFF:
-                        compatible = True
-                        break
-
-                if not compatible:
-                    continue
-
-                items.append({
-                    "request_id": f"req_{req_id_int}",
-                    "area": req_area,
-                    "direction": req_dir,
-                    "time_iso": req_time_iso,
-                })
-
+            # Mark as cancelled
+            cur.execute(
+                "UPDATE ride_req SET status='cancelled' WHERE request_id=?",
+                (req_id_int,),
+            )
+            conn.commit()
             conn.close()
-
-            return {
-                "type": "RIDE.DRIVER_OPEN_REQS_RES",
-                "id": mid,
-                "payload": {"items": items},
-            }
-
         except Exception:
-            logging.exception("RIDE.DRIVER_OPEN_REQS_REQ failed")
+            logging.exception("RIDE.CANCEL_REQ failed")
             return {
                 "type": "ERROR",
                 "id": mid,
                 "payload": {
                     "code": "SERVER_ERROR",
-                    "message": "Failed to list driver-compatible requests",
+                    "message": "Failed to cancel request",
                 },
             }
 
-    if mtype == "RIDE.DRIVER_MATCHES_REQ":
-        driver_id, err = require_logged_in(conn_state, mid)
-        if err:
-            return err
-        _ok, derr = require_driver(conn_state, mid)
-        if derr:
-            return derr
-        return _driver_matches_list(driver_id, mid)
+        # Clean up in-memory tracking
+        req_key = f"req_{req_id_int}"
+        with STATE_LOCK:
+            ACTIVE_REQUEST_DRIVERS.pop(req_key, None)
+            _REQUEST_LAST_TOUCH.pop(req_key, None)
+            REQUEST_PASSENGERS.pop(req_key, None)
 
-    if mtype == "RIDE.COMPLETE_REQ":
-        return _ride_complete(conn_state, payload, mid)
+        
+        return {
+            "type": "RIDE.CANCEL_RES",
+            "id": mid,
+            "payload": {"request_id": req_key},
+        }
     
     if mtype == "PEER.ANNOUNCE_REQ":
         uid, err = require_logged_in(conn_state, mid)
@@ -1428,8 +1532,9 @@ def handle_message(msg: dict, conn_state: dict):
             }}
         except Exception:
             logging.exception("PEER>ANNOUNCE check failed")
-        DRIVER_PEERS[uid] = (ip, port)
-        ONLINE_DRIVERS[uid] = conn_state.get("sock")
+        with STATE_LOCK:
+            DRIVER_PEERS[uid] = (ip, port)
+            ONLINE_DRIVERS[uid] = conn_state.get("sock")
         logging.info("PEER announced: user_%s -> %s:%s", uid, ip, port)
         return {"type":"PEER.ANNOUNCE_RES","id":mid,"payload":{"ip":ip,"port":port}}
     
@@ -1464,13 +1569,16 @@ def handle_message(msg: dict, conn_state: dict):
             }
 
         # Save endpoint for _ride_accept and mark driver online
-        DRIVER_PEERS[uid]   = (ip, port)
-        ONLINE_DRIVERS[uid] = conn_state.get("sock")
+        with STATE_LOCK:
+            DRIVER_PEERS[uid]   = (ip, port)
+            ONLINE_DRIVERS[uid] = conn_state.get("sock")
 
         logging.info("PEER.OPEN: user_%s reachable at %s:%s", uid, ip, port)
 
         return {"type": "PEER.OPEN_RES", "id": mid, "payload": {"ip": ip, "port": port}}
-
+    
+    if mtype == "RIDE.COMPLETE_REQ":
+        return _ride_complete(conn_state, payload, mid)
 
 
     # Unknown
@@ -1506,13 +1614,18 @@ def client_thread(conn: socket.socket, addr):
     finally:
         try:
             uid = conn_state.get("user_id")
-            if uid in ONLINE_DRIVERS and ONLINE_DRIVERS.get(uid) is conn:
-                ONLINE_DRIVERS.pop(uid, None)
-            DRIVER_PEERS.pop(uid, None)
-            conn.close()
+            with STATE_LOCK:
+                if uid in ONLINE_DRIVERS and ONLINE_DRIVERS.get(uid) is conn:
+                    ONLINE_DRIVERS.pop(uid, None)
+                DRIVER_PEERS.pop(uid, None)
+                conn.close()
         except Exception:
             pass
         logging.info("Client disconnected: %s", peer)
+        if uid is not None:
+            _cancel_active_matches_for_driver(uid)
+            _free_driver(uid)
+            
 
 def serve(host: str, port: int):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
