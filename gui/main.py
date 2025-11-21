@@ -4,15 +4,13 @@ import json
 import re
 import socket
 import uuid
-import threading
-import logging
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QTimeEdit, QDateTimeEdit, QDialog, QTextEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer
 
 # ===== error popup for uncaught exceptions =====
 def excepthook(exc_type, exc, tb):
@@ -251,17 +249,12 @@ EMAIL_RE    = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 # =============================================================================
 # Persistent JSONL session (one TCP connection per client after login)
 # =============================================================================
-class JsonlSession(QObject):
-    push_reveived = pyqtSignal(dict)
-    def __init__(self, host: str, port: int, timeout: float = 4.0, parent=None):
-        super().__init__(parent)
+class JsonlSession:
+    def __init__(self, host: str, port: int, timeout: float = 4.0):
         self.host = host
         self.port = port
         self.timeout = timeout
         self.sock: socket.socket | None = None
-    
-    def handle_push(self, msg: dict):
-        self.push_reveived.emit(msg)
 
     def ensure_connected(self):
         if self.sock is not None:
@@ -270,42 +263,11 @@ class JsonlSession(QObject):
         s.settimeout(self.timeout)
         self.sock = s
 
-    def request(self, env: dict) -> dict:
-        """Send 1 request, wait for 1 response, over the SAME socket. ignore push messages"""
-        if not isinstance(env, dict):
-            raise TypeError("JsonlSession.request expects a dict envelope")
-        
+    def request(self, obj: dict) -> dict:
+        """Send 1 request, wait for 1 response, over the SAME socket."""
         self.ensure_connected()
-
-        mid = env.get("id")
-        if not mid:
-            mid = str(uuid.uuid4)
-            env["id"] = mid
-
-        if "payload" not in env or env["payload"] is None:
-            env["paylaod"] = {}
-
-        send_json(self.sock, env)
-
-        while True:
-            msg = recv_json(self.sock)
-            if msg is None:
-                # timeout or EOF – adjust error handling
-                raise RuntimeError(f"Timeout or disconnect waiting for response to {env.get('type')}")
-            if msg.get("id") == mid:
-                return msg
-
-            # Otherwise, treat as push / unsolicited
-            t = msg.get("type")
-            if t in ("RIDE.MATCHED", "REQUEST_CLOSED", "DRIVER.BROADCAST"):
-                self.handle_push(msg)
-                continue
-
-            # Stray message with some other id; log and ignore
-            logging.warning("JsonlSession: ignoring unsolicited message: %r", msg)
-
-
-      
+        send_json(self.sock, obj)
+        return recv_json(self.sock)
 
     def close(self):
         try:
@@ -715,14 +677,6 @@ class ScheduleScreen(QWidget):
         return self.time_edit.time().toString("HH:mm")
 
     def refresh(self):
-        # remember currently selected schedule_id (if any)
-        current_row = self.table.currentRow()
-        selected_sched_id = None
-        if current_row >= 0:
-            item0 = self.table.item(current_row, 0)
-            if item0 is not None:
-                selected_sched_id = item0.data(Qt.UserRole)
-
         req = {
             "type": "SCHEDULE.LIST_REQ",
             "id": str(uuid.uuid4()),
@@ -735,12 +689,8 @@ class ScheduleScreen(QWidget):
             return
 
         if resp.get("type") != "SCHEDULE.LIST_RES":
-            self.show_error(
-                resp.get("payload", {}).get(
-                    "message",
-                    f"Unexpected response: {resp.get('type')}"
-                )
-            )
+            self.show_error(resp.get("payload", {}).get("message",
+                            f"Unexpected response: {resp.get('type')}"))
             return
 
         items = resp.get("payload", {}).get("items", [])
@@ -752,29 +702,17 @@ class ScheduleScreen(QWidget):
 
             wd_idx = item["weekday"]
             wd = ["Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"][wd_idx] \
-                if 0 <= wd_idx <= 6 else str(wd_idx)
+                    if 0 <= wd_idx <= 6 else str(wd_idx)
 
             c0 = QTableWidgetItem(wd)
-            # store schedule_id here
-            c0.setData(Qt.UserRole, item["schedule_id"])
+            c0.setData(Qt.UserRole, item["schedule_id"])   # schedule_id stored here
 
             self.table.setItem(row, 0, c0)
             self.table.setItem(row, 1, QTableWidgetItem(item["depart_time"]))
             self.table.setItem(row, 2, QTableWidgetItem(item["direction"]))
             self.table.setItem(row, 3, QTableWidgetItem(item["area"]))
 
-        # try to reselect previous schedule if it still exists
-        if selected_sched_id is not None:
-            for row in range(self.table.rowCount()):
-                item0 = self.table.item(row, 0)
-                if item0 is not None and item0.data(Qt.UserRole) == selected_sched_id:
-                    self.table.setCurrentCell(row, 0)
-                    break
-
-        # up to you if you keep this; it will pop a dialog every refresh
-        # self.show_ok(f"Loaded {len(items)} slots.")
-
-
+        self.show_ok(f"Loaded {len(items)} slots.")
 
 
 
@@ -837,8 +775,6 @@ class RideRequestPage(QWidget):
         super().__init__(parent)
         self.session = session
 
-        self.current_request_id: str | None = None
-
         self.in_area = QLineEdit()
         self.in_area.setPlaceholderText("e.g Hamra")
 
@@ -853,11 +789,6 @@ class RideRequestPage(QWidget):
         self.btn_submit = QPushButton("Request Ride")
         self.btn_submit.clicked.connect(self.on_submit)
 
-        self.btn_cancel = QPushButton("Cancel request")
-        self.btn_cancel.setEnabled(False)
-        self.btn_cancel.clicked.connect(self.on_cancel_clicked)
-
-        
         # NEW: chat button
         self.btn_chat = QPushButton("Open chat")
         self.btn_chat.setEnabled(False)
@@ -893,7 +824,7 @@ class RideRequestPage(QWidget):
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(self.btn_submit)
-        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_chat)   # chat button here
         row.addStretch(1)
         root.addLayout(row)
 
@@ -904,8 +835,6 @@ class RideRequestPage(QWidget):
         root.addWidget(self.lbl_request_id)
         root.addWidget(self.lbl_status)
         root.addStretch(1)
-
-        self.set_idle_state()
 
     def show_error(self, msg):
         self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
@@ -947,94 +876,17 @@ class RideRequestPage(QWidget):
         p = resp.get("payload", {})
 
         if rtype == "RIDE.REQUEST_RES":
-            req_id = p.get("request_id")
-            found  = p.get("candidates_found", 0)
-
+            req_id = p.get("request_id", "—")
             self.current_request_id = req_id
-            self.btn_cancel.setEnabled(True)
-            self.btn_submit.setEnabled(False)
-
+            self.btn_chat.setEnabled(True)
+            found  = p.get("candidates_found", 0)
             self.lbl_request_id.setText(f"Request ID: {req_id}")
-            
             self.lbl_status.setText(f"Status: open — compatible drivers found: {found}")
             self.show_ok("Ride request created.")
-
         elif rtype == "ERROR":
-            code = p.get("code")
-            msg = p.get("message", "Failed to create ride request")
-
-            #self.show_error(p.get("message", "Failed to create ride request."))
-            if code == "PASSENGER_BUSY":
-                self.current_request_id = None
-                self.btn_cancel.setEnabled(False)
-            self.show_error(msg)
+            self.show_error(p.get("message", "Failed to create ride request."))
         else:
             self.show_error(f"Unexpected response: {rtype}")
-
-    def on_cancel_clicked(self):
-        if not self.current_request_id:
-            self.show_error("No active request to cancel.")
-            return
-        
-        
-
-        req = {
-            "type": "RIDE.CANCEL_REQ",
-            "id": str(uuid.uuid4()),
-            "payload": {"request_id": self.current_request_id},
-        }
-
-        try:
-            resp = self.session.request(req)
-        except Exception as e:
-            self.show_error(f"Network error: {e}")
-            return
-
-        rtype = resp.get("type")
-        payload = resp.get("payload", {})
-
-        if rtype == "RIDE.CANCEL_RES":
-            self.current_request_id = None
-            self.set_idle_state()
-            QMessageBox.information(self, "Request Cancelled", "Your ride request has been cancelled.")
-            return
-
-        elif rtype == "ERROR":
-            code = payload.get("code")
-            msg = payload.get("message", "Unknown error")
-            
-            if code == "INVALID_STATE":
-                QMessageBox.information(self, "Cannot cancel", "Your request has already been accepted by a driver so it not longer can be cancelled.")
-                return
-            QMessageBox.warning(self, "Cancel failed", f"Server returned error: {code or 'ERROR'} - {msg}")
-            return
-        
-        QMessageBox.warning(self, "Unexpected reply",
-                    f"Unexpected response to cancel: {rtype}")
-        
-
-    def handle_matched(self, payload):
-        self.lbl_status.setText("Status: A driver has accepted your request!")
-        self.btn_cancel.setEnabled(False)
-
-    def set_idle_state(self):
-        """Reset the page to 'no active ride request' state."""
-        self.current_request_id = None
-
-        try:
-            self.btn_cancel.setEnabled(False)
-        except AttributeError:
-            pass
-        try:
-            self.btn_submit.setEnabled(True)
-            self.lbl_request_id.setText("Request ID: —")
-            self.lbl_status.setText("Status: —")
-        except AttributeError:
-            pass
-        try:
-            self.lbl_status.setText("No active ride request.")
-        except AttributeError:
-            pass   
 
 class DriverRidePage(QWidget):
     def __init__(self, session: JsonlSession, parent=None):
@@ -1122,7 +974,94 @@ class DriverRidePage(QWidget):
         self.ok.setVisible(True)
         self.err.setVisible(False)
 
-    def refresh(self):
+    def _periodic_refresh(self):
+        self.refresh(preserve_selection=True)
+        self.refresh_matches(preserve_selection=True)
+
+
+
+
+    # ---------------- accepted rides (matches) ----------------
+    def refresh_matches(self, preserve_selection: bool = False):
+        """Load all active matches for this driver."""
+        # --- save selection (optional) ---
+        selected_req_id = None
+        if preserve_selection:
+            r = self.table_matches.currentRow()
+            if r >= 0:
+                item0 = self.table_matches.item(r, 0)
+                if item0 is not None:
+                    selected_req_id = item0.data(Qt.UserRole) or item0.text()
+
+        req = {
+            "type": "RIDE.DRIVER_MATCHES_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {},
+        }
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error (matches): {e}")
+            return
+
+        if resp.get("type") != "RIDE.DRIVER_MATCHES_RES":
+            self.show_error(resp.get("payload", {}).get(
+                "message", f"Unexpected response: {resp.get('type')}"
+            ))
+            return
+
+        items = resp.get("payload", {}).get("items", [])
+        self.table_matches.setRowCount(0)
+
+        # --- rebuild table ---
+        for item in items:
+            row = self.table_matches.rowCount()
+            self.table_matches.insertRow(row)
+
+            req_id = item.get("request_id", "—")
+            area = item.get("area", "—")
+            direction = item.get("direction", "—")
+            time_iso = item.get("time_iso", "—")
+
+            c0 = QTableWidgetItem(req_id)
+            c0.setData(Qt.UserRole, req_id)
+
+            self.table_matches.setItem(row, 0, c0)
+            self.table_matches.setItem(row, 1, QTableWidgetItem(area))
+            self.table_matches.setItem(row, 2, QTableWidgetItem(direction))
+            self.table_matches.setItem(row, 3, QTableWidgetItem(time_iso))
+
+        # --- restore selection if possible ---
+        if preserve_selection and selected_req_id:
+            for row in range(self.table_matches.rowCount()):
+                item0 = self.table_matches.item(row, 0)
+                if not item0:
+                    continue
+                value = item0.data(Qt.UserRole) or item0.text()
+                if value == selected_req_id:
+                    self.table_matches.selectRow(row)
+                    break
+
+        self.show_ok(f"Loaded {len(items)} accepted rides.")
+
+
+    def on_complete_selected(self):
+        """Mark an accepted ride as completed/removed."""
+        r = self.table_matches.currentRow()
+        if r < 0:
+            self.show_error("Select an accepted ride to complete/remove.")
+            return
+
+        item0 = self.table_matches.item(r, 0)
+        if not item0:
+            self.show_error("Internal error: missing request_id.")
+            return
+
+        req_id = item0.data(Qt.UserRole) or item0.text()
+        if not isinstance(req_id, str) or not req_id.startswith("req_"):
+            self.show_error("Internal error: invalid request_id.")
+            return
+
         req = {
             "type": "RIDE.COMPLETE_REQ",
             "id": str(uuid.uuid4()),
@@ -1212,7 +1151,7 @@ class DriverRidePage(QWidget):
             return
 
         req_id = item0.data(Qt.UserRole)
-        if req_id is None:
+        if not isinstance(req_id, str):
             self.show_error("Internal error: invalid request id.")
             return
 
@@ -1237,25 +1176,130 @@ class DriverRidePage(QWidget):
             self.refresh()
             self.refresh_matches()
         elif rtype == "ERROR":
-            code = payload.get("code")
-            msg = payload.get("message", "Failed to accept request.")
-
-            if code == "REQUEST_CLOSED":
-                msg = "This request is no longer available (cancelled, matched, or expired)"
-            
-            self.show_error(msg)
-            self.table.clearSelection()
-            self.refresh()
+            self.show_error(payload.get("message", "Failed to accept request."))
         else:
             self.show_error(f"Unexpected response: {rtype}")
-    
-    def handle_request_closed(self, payload):
-        QMessageBox.information(self, "Request Closed", "A ride request you accepted has been closed (cancelled by passenger or expired).")
-        self.refresh()
-    
-    def add_broadcast(self, payload):
-        self.refresh()
 
+    # ---------------- chat ----------------
+    def on_open_chat(self):
+        r = self.table_matches.currentRow()
+        if r < 0:
+            self.show_error("Select an accepted ride to chat.")
+            return
+
+        item0 = self.table_matches.item(r, 0)
+        if not item0:
+            self.show_error("Internal error: missing request_id.")
+            return
+
+        req_id = item0.data(Qt.UserRole) or item0.text()
+        if not isinstance(req_id, str) or not req_id.startswith("req_"):
+            self.show_error("Internal error: invalid request_id.")
+            return
+
+        dlg = ChatDialog(self.session, req_id, self)
+        dlg.exec_()
+
+
+class RidePage(QWidget):
+    def __init__(self, session: JsonlSession, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        self.tabs = QTabWidget()
+        self.passenger_page = RideRequestPage(session)
+        self.driver_page = DriverRidePage(session)
+
+        self.tabs.addTab(self.passenger_page, "Passenger")
+        self.tabs.addTab(self.driver_page, "Driver")
+        # driver tab disabled by default until we know driver mode
+        self.tabs.setTabEnabled(1, False)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.tabs)
+
+
+class ChatDialog(QDialog):
+    def __init__(self, session: JsonlSession, request_id: str, parent=None):
+        super().__init__(parent)
+        self.session = session
+        self.request_id = request_id
+        self.last_message_id = 0
+
+        self.setWindowTitle(f"Chat – {request_id}")
+        self.resize(400, 300)
+
+        self.view = QTextEdit()
+        self.view.setReadOnly(True)
+
+        self.input = QLineEdit()
+        self.btn_send = QPushButton("Send")
+        self.btn_send.clicked.connect(self.send_message)
+
+        row = QHBoxLayout()
+        row.addWidget(self.input, 1)
+        row.addWidget(self.btn_send)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.view, 1)
+        layout.addLayout(row)
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.poll_messages)
+        self.timer.start(1500)  # 1.5s
+
+        self.poll_messages()  # initial load
+
+    def append_message(self, sender: str, text: str):
+        self.view.append(f"<b>{sender}:</b> {text}")
+
+    def send_message(self):
+        text = self.input.text().strip()
+        if not text:
+            return
+        req = {
+            "type": "RIDE.CHAT_SEND_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {"request_id": self.request_id, "text": text},
+        }
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Network error: {e}")
+            return
+
+        if resp.get("type") == "RIDE.CHAT_SEND_RES":
+            self.input.clear()
+            self.poll_messages()
+        else:
+            QMessageBox.warning(
+                self,
+                "Error",
+                resp.get("payload", {}).get("message", "Failed to send message"),
+            )
+
+    def poll_messages(self):
+        req = {
+            "type": "RIDE.CHAT_POLL_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {"request_id": self.request_id, "after_message_id": self.last_message_id},
+        }
+        try:
+            resp = self.session.request(req)
+        except Exception:
+            # don't spam errors while polling
+            return
+
+        if resp.get("type") != "RIDE.CHAT_POLL_RES":
+            return
+
+        msgs = resp.get("payload", {}).get("messages", [])
+        for m in msgs:
+            mid_int = m.get("message_id", 0)
+            sender = m.get("sender_user_id", "?")
+            text = m.get("text", "")
+            self.append_message(sender, text)
+            self.last_message_id = max(self.last_message_id, mid_int)
 
 # =============================================================================
 # Main window: wires everything together
@@ -1269,10 +1313,6 @@ class MainWindow(QMainWindow):
 
         # Persistent session (used by login + profile + schedule + ride)
         self.session = JsonlSession(HOST, PORT, SOCKET_TIMEOUT)
-        self.session.push_reveived.connect(self.on_push_received)
-
-        self.p2p_sock = None
-        self.p2p_thread = None
 
         self.root = QStackedWidget()
         self.setCentralWidget(self.root)
@@ -1299,22 +1339,18 @@ class MainWindow(QMainWindow):
         self.btn_profile = QPushButton("Profile")
         self.btn_sched   = QPushButton("Schedule")
         self.btn_ride    = QPushButton("Ride")
-        self.btn_logout = QPushButton("Logout")
-        
-        for b in (self.btn_profile, self.btn_sched, self.btn_ride):
+        self.btn_chat    = QPushButton("Chat")
+        for b in (self.btn_profile, self.btn_sched, self.btn_ride, self.btn_chat):
             b.setCheckable(True)
             b.setAutoExclusive(True)
             left_l.addWidget(b)
         left_l.addStretch(1)
 
-        left_l.addWidget(self.btn_logout)
-        self.btn_logout.clicked.connect(self.on_logout)
-
         self.stack = QStackedWidget()
         # placeholders; will be replaced after login
         self.profile_page = title_page("Profile (login required)")
         self.schedule_page = title_page("Your Schedule")
-        
+        self.ride_page = RidePage(self.session)
 
         # index 0 → Profile (placeholder until login)
         self.profile_page = title_page("Profile (login required)")
@@ -1403,13 +1439,7 @@ class MainWindow(QMainWindow):
         # enable/disable Schedule tab
         self.set_schedule_enabled(is_driver)
 
-        # P2P listener follows driver mode
-        if is_driver:
-            self.start_p2p_listener()
-        else:
-            self.stop_p2p_listener()
-
-        # swap ride page (index 2) between driver/passenger views
+        # remove old ride page (whatever it was)
         if hasattr(self, "ride_page"):
             self.stack.removeWidget(self.ride_page)
             self.ride_page.deleteLater()
@@ -1422,157 +1452,6 @@ class MainWindow(QMainWindow):
 
         # insert it at index 2 (Ride tab)
         self.stack.insertWidget(2, self.ride_page)
-
-    def closeEvent(self, event):
-        """on window close, logout cleanly and close the session"""
-        try:
-            if self.session is not None:
-                req = {
-                    "type": "AUTH.LOGOUT_REQ",
-                    "id": str(uuid.uuid4()),
-                    "payload": {}
-                }
-                try:
-                    # best-effort logout; ignore errors
-                    self.session.request(req)
-                except Exception:
-                    pass
-
-                try:
-                    self.stop_p2p_listener() 
-                    self.session.close()
-                except Exception:
-                    pass
-        finally:
-            super().closeEvent(event)
-            
-    def on_logout(self):
-        try:
-            req = {"type": "AUTH.LOGOUT_REQ",
-               "id": str(uuid.uuid4()),
-               "payload": {}}
-            self.session.request(req)
-        except Exception:
-            # If network fails, still locally reset
-            pass
-
-        self.stop_p2p_listener() #stop p2p
-
-        if isinstance(self.ride_page, DriverRidePage):
-            self.ride_page.timer.stop()  # stop auto-refresh timer
-
-        self.set_schedule_enabled(False)
-        self.root.setCurrentIndex(0)
-        self.btn_profile.setChecked(False)
-        self.btn_sched.setChecked(False)
-        self.btn_ride.setChecked(False)
-
-    def start_p2p_listener(self):
-        """Start a simple TCP listener for driver P2P and announce it via PEER.OPEN_REQ."""
-        # If already running, do nothing
-        if self.p2p_sock is not None:
-            return
-
-        try:
-            # 1) create listening socket on an ephemeral port
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("0.0.0.0", 0))   # OS chooses port
-            s.listen(1)
-            port = s.getsockname()[1]
-            self.p2p_sock = s
-
-            # 2) tell server where we are listening
-            req = {
-                "type": "PEER.OPEN_REQ",
-                "id": str(uuid.uuid4()),
-                "payload": {
-                    "p2p_port": port
-                    # we could also send external_ip/external_port if we knew them
-                }
-            }
-            try:
-                resp = self.session.request(req)
-            except Exception as e:
-                # if this fails, just log and shut listener down
-                print(f"PEER.OPEN_REQ failed: {e}")
-                s.close()
-                self.p2p_sock = None
-                return
-
-            if resp.get("type") != "PEER.OPEN_RES":
-                # server rejected; clean up
-                print(f"PEER.OPEN_RES error: {resp}")
-                s.close()
-                self.p2p_sock = None
-                return
-
-            # 3) spin a background thread just to accept connections
-            def _p2p_loop(listener: socket.socket):
-                try:
-                    while True:
-                        conn, addr = listener.accept()
-                        # minimal behavior: immediately close, or print
-                        print(f"P2P connection from {addr}, closing.")
-                        conn.close()
-                except Exception:
-                    # any error → exit thread
-                    pass
-
-            t = threading.Thread(target=_p2p_loop, args=(s,), daemon=True)
-            t.start()
-            self.p2p_thread = t
-
-            print(f"P2P listener started on port {port}")
-
-        except Exception as e:
-            print(f"start_p2p_listener failed: {e}")
-            if self.p2p_sock:
-                self.p2p_sock.close()
-            self.p2p_sock = None
-            self.p2p_thread = None
-
-
-    def stop_p2p_listener(self):
-        """Stop driver P2P listener if running."""
-        if self.p2p_sock is not None:
-            try:
-                self.p2p_sock.close()
-            except Exception:
-                pass
-        self.p2p_sock = None
-        self.p2p_thread = None
-    
-    def on_push_received(self, msg: dict):
-        t = msg.get("type")
-
-        if t == "RIDE.MATCHED":
-            self.on_ride_matched(msg)
-        
-        elif t == "REQUEST_CLOSED":
-            self.on_request_closed(msg)
-        
-        elif t == "DRIVER.BROADCAST":
-            self.on_driver_broadcast(msg)
-    
-    def on_ride_matched(self, msg: dict):
-        payload = msg.get("payload", {})
-        if isinstance(self.ride_page, RideRequestPage):
-            self.ride_page.handle_matched(payload)
-    
-    def on_request_closed(self, msg: dict):
-        payload = msg.get("payload", {})
-        if isinstance(self.ride_page, DriverRidePage):
-            self.ride_page.handle_request_closed(payload)
-    
-    def on_driver_broadcast(self, msg: dict):
-        if isinstance(self.ride_page, DriverRidePage):
-            self.ride_page.add_broadcast(msg.get("payload", {}))
-    
-
-
-
-
 
 
 def main():
