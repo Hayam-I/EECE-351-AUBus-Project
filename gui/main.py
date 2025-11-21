@@ -1200,88 +1200,7 @@ class DriverRidePage(QWidget):
         dlg = ChatDialog(self.session, req_id, self)
         dlg.exec_()
 
-# =============================================================================
-# Driver "Accept Ride" Page (simple, manual request_id)
-# =============================================================================
-class RideDriverPage(QWidget):
-    def __init__(self, session: JsonlSession, parent=None):
-        super().__init__(parent)
-        self.session = session
 
-        self.in_request_id = QLineEdit()
-        self.in_request_id.setPlaceholderText("e.g. req_1")
-
-        self.btn_accept = QPushButton("Accept Request")
-        self.btn_accept.clicked.connect(self.on_accept)
-
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
-        form.setFormAlignment(Qt.AlignCenter | Qt.AlignTop)
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
-        form.addRow("Request ID:", self.in_request_id)
-
-        self.err = QLabel("")
-        self.err.setWordWrap(True)
-        self.err.setStyleSheet("color: red;")
-        self.err.setVisible(False)
-        self.ok = QLabel("")
-        self.ok.setWordWrap(True)
-        self.ok.setStyleSheet("color: #0a7a0a;")
-        self.ok.setVisible(False)
-
-        self.lbl_result = QLabel("Result: —")
-
-        root = QVBoxLayout(self)
-        root.addLayout(form)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        row.addWidget(self.btn_accept)
-        row.addStretch(1)
-        root.addLayout(row)
-        root.addSpacing(10)
-        root.addWidget(self.err)
-        root.addWidget(self.ok)
-        root.addSpacing(12)
-        root.addWidget(self.lbl_result)
-        root.addStretch(1)
-
-    def show_error(self, msg):
-        self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
-
-    def show_ok(self, msg):
-        self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
-
-    def on_accept(self):
-        req_id = self.in_request_id.text().strip()
-        if not req_id:
-            self.show_error("Request ID is required (e.g. req_1).")
-            return
-
-        payload = {"request_id": req_id}
-        req = {"type": "RIDE.ACCEPT_REQ", "id": str(uuid.uuid4()), "payload": payload}
-
-        try:
-            resp = self.session.request(req)
-        except Exception as e:
-            self.show_error(f"Network error: {e}")
-            return
-
-        rtype = resp.get("type")
-        p = resp.get("payload", {})
-
-        if rtype == "RIDE.ACCEPT_RES":
-            self.lbl_result.setText(f"Result: accepted {p.get('request_id', req_id)}")
-            self.show_ok("Ride accepted successfully.")
-        elif rtype == "ERROR":
-            self.lbl_result.setText("Result: error")
-            self.show_error(p.get("message", "Failed to accept ride."))
-        else:
-            self.show_error(f"Unexpected response: {rtype}")
-
-# =============================================================================
-# Ride Page: tabs for Passenger / Driver
-# =============================================================================
 class RidePage(QWidget):
     def __init__(self, session: JsonlSession, parent=None):
         super().__init__(parent)
@@ -1289,7 +1208,7 @@ class RidePage(QWidget):
 
         self.tabs = QTabWidget()
         self.passenger_page = RideRequestPage(session)
-        self.driver_page = RideDriverPage(session)
+        self.driver_page = DriverRidePage(session)
 
         self.tabs.addTab(self.passenger_page, "Passenger")
         self.tabs.addTab(self.driver_page, "Driver")
