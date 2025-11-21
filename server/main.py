@@ -1,5 +1,3 @@
-
-
 #!/usr/bin/env python3
 """
 AUBus – Server
@@ -177,6 +175,8 @@ def require_driver(conn_state, mid):
         logging.exception("require_driver failed")
         return None, {"type": "ERROR", "id": mid,
                       "payload": {"code": "SERVER_ERROR", "message": "Internal error"}}
+
+#time/location helpers
 def _minutes_from_hhmm(s: str) -> int:
     hh, mm = s.split(":")
     return int(hh) * 60 + int(mm)
@@ -187,6 +187,9 @@ def _minutes_from_iso(iso_s: str) -> tuple[int, int]:
     sun0 = (py_wd + 1) % 7
     minutes = dt.hour * 60 + dt.minute
     return sun0, minutes
+
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
 #going from req_123 -> 123
 def _reqid_to_int(req_id: str) -> int | None:
@@ -830,6 +833,11 @@ def _ride_complete(conn_state, payload, mid):
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("UPDATE matches SET status='completed' WHERE request_id=? AND driver_id=?", (req_id_int, driver_id))
+        cur.execute(
+        "UPDATE ride_req SET status='completed' WHERE request_id=?",
+        (req_id_int,)
+        )
+
         conn.commit()
         conn.close()
     except Exception:
@@ -1396,9 +1404,9 @@ def handle_message(msg: dict, conn_state: dict):
         logging.info("PEER.OPEN: user_%s reachable at %s:%s", uid, ip, port)
 
         return {"type": "PEER.OPEN_RES", "id": mid, "payload": {"ip": ip, "port": port}}
-
     
-
+    if mtype == "RIDE.COMPLETE_REQ":
+        return _ride_complete(conn_state, payload, mid)
 
 
     # Unknown
