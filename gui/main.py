@@ -40,6 +40,208 @@ def title_page(text):
     v.addStretch(1)
     return w
 
+#==== design =====
+def apply_bento_theme(app: QApplication):
+    app.setStyle("Fusion")  # more modern base style
+
+    app.setStyleSheet("""
+    /* ====== Global background ====== */
+    QMainWindow#MainWindow, QWidget {
+        background-color: #020617; /* very dark navy */
+        color: #e5e7eb;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        font-size: 10pt;
+    }
+
+    /* ====== Sidebar ====== */
+    QWidget#SideBar {
+        background-color: #020617;
+        border-right: 1px solid #1f2937;
+    }
+
+    QWidget#SideBar QPushButton {
+        background-color: transparent;
+        border: none;
+        color: #9ca3af;
+        padding: 8px 14px;
+        text-align: left;
+        border-radius: 10px;
+    }
+
+    QWidget#SideBar QPushButton:hover {
+        background-color: rgba(99,102,241,0.18); /* soft indigo */
+        color: #e5e7eb;
+    }
+
+    QWidget#SideBar QPushButton:checked {
+        background-color: #4f46e5; /* primary indigo */
+        color: #f9fafb;
+    }
+
+    /* ====== Cards / panels ====== */
+    QStackedWidget, QWidget#login_card, QWidget#register_card {
+        background-color: #020617;
+        border-radius: 18px;
+    }
+
+    QWidget#login_card, QWidget#register_card {
+        border: 1px solid rgba(148,163,184,0.35);
+        background-color: qlineargradient(
+            x1:0, y1:0, x2:1, y2:1,
+            stop:0 #020617,
+            stop:1 #020617
+        );
+    }
+    
+    QLabel {
+        color: #e5e7eb;
+        background-color: transparent;   /* <<< this removes the black box */
+        border: none;
+    }
+
+    QLabel#page_title {
+        font-size: 18pt;
+        font-weight: 600;
+        color: #e5e7eb;
+    }
+
+    /* ====== Inputs ====== */
+    QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
+        background-color: rgba(255,255,255,0.04);
+        border: 1px solid rgba(148,163,184,0.25); 
+        border-radius: 8px;
+        padding: 6px 10px;
+        color: #e5e7eb;
+        selection-background-color: #4f46e5;
+        selection-color: #f9fafb;
+    }
+                      
+
+    QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
+        border: 1px solid #6366f1;
+        background-color: rgba(255,255,255,0.07);
+    }
+
+    QComboBox QAbstractItemView {
+        background-color: #020617;
+        border: 1px solid #1f2937;
+        selection-background-color: #4f46e5;
+        selection-color: #f9fafb;
+    }
+
+    /* ====== Primary / secondary buttons ====== */
+    QPushButton {
+        background-color: #111827;
+        color: #e5e7eb;
+        border-radius: 10px;
+        padding: 6px 14px;
+        border: 1px solid #1f2937;
+    }
+
+    QPushButton:hover {
+        background-color: #1f2937;
+        border-color: #4b5563;
+    }
+
+    QPushButton:pressed {
+        background-color: #4f46e5;
+        border-color: #4f46e5;
+        color: #f9fafb;
+    }
+
+    QPushButton:disabled {
+        background-color: #020617;
+        color: #4b5563;
+        border-color: #111827;
+    }
+
+    /* ====== Tables ====== */
+    QTableWidget {
+        background-color: #020617;
+        alternate-background-color: #020617;
+        border: 1px solid #111827;
+        border-radius: 14px;
+        gridline-color: #111827;
+        selection-background-color: rgba(129,140,248,0.25);
+        selection-color: #f9fafb;
+    }
+
+    QHeaderView::section {
+        background-color: #020617;
+        color: #9ca3af;
+        padding: 6px 8px;
+        border: none;
+        border-bottom: 1px solid #111827;
+    }
+
+    QTableCornerButton::section {
+        background-color: #020617;
+        border: none;
+    }
+
+    /* Scrollbars (subtle) */
+    QScrollBar:vertical, QScrollBar:horizontal {
+        background: #020617;
+        border-radius: 4px;
+        width: 10px;
+        height: 10px;
+        margin: 2px;
+    }
+
+    QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+        background: #111827;
+        border-radius: 4px;
+    }
+
+    QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+        background: #4b5563;
+    }
+
+    QScrollBar::add-line, QScrollBar::sub-line {
+        width: 0;
+        height: 0;
+        background: transparent;
+    }
+
+    /* Status labels */
+    QLabel {
+        color: #e5e7eb;
+    }
+
+    QLabel[style*="color: red"] {
+        color: #f97373;
+    }
+
+    QLabel[style*="#0a7a0a"] {
+        color: #4ade80;
+    }
+
+    QTabWidget::pane {
+        border: 1px solid #111827;
+        border-radius: 14px;
+        background-color: #020617;
+    }
+
+    QTabBar::tab {
+        background-color: transparent;
+        color: #9ca3af;
+        padding: 6px 16px;
+        border-radius: 10px;
+        margin: 4px;
+    }
+
+    QTabBar::tab:selected {
+        background-color: #4f46e5;
+        color: #f9fafb;
+    }
+
+    QTabBar::tab:hover {
+        background-color: rgba(79,70,229,0.25);
+        color: #e5e7eb;
+    }
+    """)
+
+
 # ===== validation regex (mirror server) =====
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$")
 PASSWORD_RE = re.compile(r"^.{6,20}$")
@@ -142,11 +344,20 @@ class RegisterForm(QWidget):
         self.btn_register = QPushButton("Create account"); self.btn_register.setMinimumWidth(120)
         self.btn_register.clicked.connect(self.on_submit)
 
-        card = QWidget(); card.setObjectName("register_card")
+        card = QWidget()
+        card.setObjectName("register_card")
         card.setStyleSheet("""
-            QWidget#register_card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; }
-            QLineEdit { padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; }
-            QLineEdit:focus { border: 1px solid #7aa7ff; outline: none; }
+            QWidget#register_card {
+                background-color: qradialgradient(
+                    cx:0.1, cy:0.0, radius:1.4,
+                    fx:0.0, fy:0.0,
+                    stop:0  rgba(129,140,248,0.25),
+                    stop:0.4 rgba(24,31,81,0.90),
+                    stop:1  #020617
+                );
+                border-radius: 20px;
+                border: 1px solid rgba(148,163,184,0.45);
+            }
         """)
         lay = QVBoxLayout(card); lay.setContentsMargins(30,20,30,20); lay.setSpacing(15)
         lay.addLayout(form); lay.addWidget(self.err); lay.addSpacing(8); lay.addWidget(self.btn_register,0,Qt.AlignHCenter)
@@ -229,11 +440,20 @@ class LoginForm(QWidget):
         self.btn_login = QPushButton("Log into account"); self.btn_login.setMinimumWidth(120)
         self.btn_login.clicked.connect(self.on_submit)
 
-        card = QWidget(); card.setObjectName("login_card")
+        card = QWidget()
+        card.setObjectName("login_card")
         card.setStyleSheet("""
-            QWidget#login_card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; }
-            QLineEdit { padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; }
-            QLineEdit:focus { border: 1px solid #7aa7ff; outline: none; }
+            QWidget#login_card {
+                background-color: qradialgradient(
+                    cx:0.9, cy:0.0, radius:1.4,
+                    fx:1.0, fy:0.0,
+                    stop:0  rgba(236,72,153,0.25),
+                    stop:0.4 rgba(24,31,81,0.90),
+                    stop:1  #020617
+                );
+                border-radius: 20px;
+                border: 1px solid rgba(148,163,184,0.45);
+            }
         """)
         lay = QVBoxLayout(card); lay.setContentsMargins(30,20,30,20); lay.setSpacing(15)
         lay.addLayout(form); lay.addWidget(self.err); lay.addSpacing(8); lay.addWidget(self.btn_login,0,Qt.AlignHCenter)
@@ -289,10 +509,34 @@ class ProfileScreen(QWidget):
         }
 
         self.in_name = QLineEdit(self.snapshot["name"])
+        self.in_name.setObjectName("profileField")
         self.in_email = QLineEdit(self.snapshot["email"])
+        self.in_email.setObjectName("profileField")
         self.in_area = QLineEdit(self.snapshot["area"])
+        self.in_area.setObjectName("profileField")
         self.chk_driver = QCheckBox("Driver Mode")
         self.chk_driver.setChecked(self.snapshot["is_driver"])
+
+        # Stronger style just for the 3 profile fields
+        profile_field_css = """
+        QLineEdit#profileField,
+        QLineEdit#profileField:disabled,
+        QLineEdit#profileField:read-only {
+            background-color: rgba(255,255,255,0.14);   /* brighter background */
+            border: 1px solid rgba(148,163,184,0.75);   /* stronger border */
+            color: #f9fafb;                              /* bright text */
+        }
+
+        QLineEdit#profileField:focus {
+            border: 1px solid #6366f1;
+            background-color: rgba(255,255,255,0.18);
+        }
+        """
+
+        self.in_name.setStyleSheet(profile_field_css)
+        self.in_email.setStyleSheet(profile_field_css)
+        self.in_area.setStyleSheet(profile_field_css)
+
 
         for w in (self.in_name, self.in_email, self.in_area):
             w.setMinimumWidth(300); w.setMaximumWidth(420)
@@ -940,6 +1184,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AUBus")
+        self.setObjectName("MainWindow")
         self.resize(1000, 650)
 
         # Persistent session (used by login + profile + schedule + ride)
@@ -969,6 +1214,7 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(app_page)
 
         left = QWidget()
+        left.setObjectName("SideBar")
         left_l = QVBoxLayout(left)
         self.btn_profile = QPushButton("Profile")
         self.btn_sched   = QPushButton("Schedule")
@@ -1009,8 +1255,13 @@ class MainWindow(QMainWindow):
         self.btn_profile.setChecked(True)
         self.stack.setCurrentIndex(0)
 
+        
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(16,16,16,16)
+        center_layout.addWidget(self.stack, 1)
         h.addWidget(left)
-        h.addWidget(self.stack, 1)
+        h.addWidget(center, 1)
 
         # connect login signal
         self.login_tab.logged_in.connect(self.after_login)
@@ -1228,6 +1479,7 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    apply_bento_theme(app)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
