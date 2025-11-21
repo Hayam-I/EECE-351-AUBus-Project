@@ -1202,7 +1202,7 @@ class DriverRidePage(QWidget):
             self.show_error(f"Unexpected response: {rtype}")
     
     def handle_request_closed(self, payload):
-        QMessageBox.information(self, "Request Closed", "A ride request you accepted has been closed (cancelled by passenger or expired).")
+        QMessageBox.information(self, "Request Closed", "A ride request you are eligible for has been closed (cancelled by passenger or expired).")
         self.refresh()
     
     def add_broadcast(self, payload):
