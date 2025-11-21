@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit
+    QHeaderView, QTimeEdit, QDateTimeEdit, QDialog, QTextEdit
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
 
@@ -39,6 +39,209 @@ def title_page(text):
     v.addWidget(lbl)
     v.addStretch(1)
     return w
+
+
+def apply_bento_theme(app: QApplication):
+    app.setStyle("Fusion")  # more modern base style
+
+    app.setStyleSheet("""
+    /* ====== Global background ====== */
+    QMainWindow#MainWindow, QWidget {
+        background-color: #020617; /* very dark navy */
+        color: #e5e7eb;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        font-size: 10pt;
+    }
+
+    /* ====== Sidebar ====== */
+    QWidget#SideBar {
+        background-color: #020617;
+        border-right: 1px solid #1f2937;
+    }
+
+    QWidget#SideBar QPushButton {
+        background-color: transparent;
+        border: none;
+        color: #9ca3af;
+        padding: 8px 14px;
+        text-align: left;
+        border-radius: 10px;
+    }
+
+    QWidget#SideBar QPushButton:hover {
+        background-color: rgba(99,102,241,0.18); /* soft indigo */
+        color: #e5e7eb;
+    }
+
+    QWidget#SideBar QPushButton:checked {
+        background-color: #4f46e5; /* primary indigo */
+        color: #f9fafb;
+    }
+
+    /* ====== Cards / panels ====== */
+    QStackedWidget, QWidget#login_card, QWidget#register_card {
+        background-color: #020617;
+        border-radius: 18px;
+    }
+
+    QWidget#login_card, QWidget#register_card {
+        border: 1px solid rgba(148,163,184,0.35);
+        background-color: qlineargradient(
+            x1:0, y1:0, x2:1, y2:1,
+            stop:0 #020617,
+            stop:1 #020617
+        );
+    }
+    
+    QLabel {
+        color: #e5e7eb;
+        background-color: transparent;   /* <<< this removes the black box */
+        border: none;
+    }
+
+    QLabel#page_title {
+        font-size: 18pt;
+        font-weight: 600;
+        color: #e5e7eb;
+    }
+
+    /* ====== Inputs ====== */
+    QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
+        background-color: rgba(255,255,255,0.04);
+        border: 1px solid rgba(148,163,184,0.25); 
+        border-radius: 8px;
+        padding: 6px 10px;
+        color: #e5e7eb;
+        selection-background-color: #4f46e5;
+        selection-color: #f9fafb;
+    }
+
+    QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
+        border: 1px solid #6366f1;
+        box-shadow: 0px 0px 6px rgba(99,102,241,0.45);
+        background-color: rgba(255,255,255,0.07);
+    }
+
+    QComboBox QAbstractItemView {
+        background-color: #020617;
+        border: 1px solid #1f2937;
+        selection-background-color: #4f46e5;
+        selection-color: #f9fafb;
+    }
+
+    /* ====== Primary / secondary buttons ====== */
+    QPushButton {
+        background-color: #111827;
+        color: #e5e7eb;
+        border-radius: 10px;
+        padding: 6px 14px;
+        border: 1px solid #1f2937;
+    }
+
+    QPushButton:hover {
+        background-color: #1f2937;
+        border-color: #4b5563;
+    }
+
+    QPushButton:pressed {
+        background-color: #4f46e5;
+        border-color: #4f46e5;
+        color: #f9fafb;
+    }
+
+    QPushButton:disabled {
+        background-color: #020617;
+        color: #4b5563;
+        border-color: #111827;
+    }
+
+    /* ====== Tables ====== */
+    QTableWidget {
+        background-color: #020617;
+        alternate-background-color: #020617;
+        border: 1px solid #111827;
+        border-radius: 14px;
+        gridline-color: #111827;
+        selection-background-color: rgba(129,140,248,0.25);
+        selection-color: #f9fafb;
+    }
+
+    QHeaderView::section {
+        background-color: #020617;
+        color: #9ca3af;
+        padding: 6px 8px;
+        border: none;
+        border-bottom: 1px solid #111827;
+    }
+
+    QTableCornerButton::section {
+        background-color: #020617;
+        border: none;
+    }
+
+    /* Scrollbars (subtle) */
+    QScrollBar:vertical, QScrollBar:horizontal {
+        background: #020617;
+        border-radius: 4px;
+        width: 10px;
+        height: 10px;
+        margin: 2px;
+    }
+
+    QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+        background: #111827;
+        border-radius: 4px;
+    }
+
+    QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+        background: #4b5563;
+    }
+
+    QScrollBar::add-line, QScrollBar::sub-line {
+        width: 0;
+        height: 0;
+        background: transparent;
+    }
+
+    /* Status labels */
+    QLabel {
+        color: #e5e7eb;
+    }
+
+    QLabel[style*="color: red"] {
+        color: #f97373;
+    }
+
+    QLabel[style*="#0a7a0a"] {
+        color: #4ade80;
+    }
+
+    QTabWidget::pane {
+        border: 1px solid #111827;
+        border-radius: 14px;
+        background-color: #020617;
+    }
+
+    QTabBar::tab {
+        background-color: transparent;
+        color: #9ca3af;
+        padding: 6px 16px;
+        border-radius: 10px;
+        margin: 4px;
+    }
+
+    QTabBar::tab:selected {
+        background-color: #4f46e5;
+        color: #f9fafb;
+    }
+
+    QTabBar::tab:hover {
+        background-color: rgba(79,70,229,0.25);
+        color: #e5e7eb;
+    }
+    """)
+
+
 
 # ===== validation regex (mirror server) =====
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$")
@@ -142,12 +345,22 @@ class RegisterForm(QWidget):
         self.btn_register = QPushButton("Create account"); self.btn_register.setMinimumWidth(120)
         self.btn_register.clicked.connect(self.on_submit)
 
-        card = QWidget(); card.setObjectName("register_card")
+        card = QWidget()
+        card.setObjectName("register_card")
         card.setStyleSheet("""
-            QWidget#register_card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; }
-            QLineEdit { padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; }
-            QLineEdit:focus { border: 1px solid #7aa7ff; outline: none; }
+            QWidget#register_card {
+                background-color: qradialgradient(
+                    cx:0.1, cy:0.0, radius:1.4,
+                    fx:0.0, fy:0.0,
+                    stop:0  rgba(129,140,248,0.25),
+                    stop:0.4 rgba(24,31,81,0.90),
+                    stop:1  #020617
+                );
+                border-radius: 20px;
+                border: 1px solid rgba(148,163,184,0.45);
+            }
         """)
+
         lay = QVBoxLayout(card); lay.setContentsMargins(30,20,30,20); lay.setSpacing(15)
         lay.addLayout(form); lay.addWidget(self.err); lay.addSpacing(8); lay.addWidget(self.btn_register,0,Qt.AlignHCenter)
 
@@ -229,12 +442,22 @@ class LoginForm(QWidget):
         self.btn_login = QPushButton("Log into account"); self.btn_login.setMinimumWidth(120)
         self.btn_login.clicked.connect(self.on_submit)
 
-        card = QWidget(); card.setObjectName("login_card")
+        card = QWidget()
+        card.setObjectName("login_card")
         card.setStyleSheet("""
-            QWidget#login_card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; }
-            QLineEdit { padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; }
-            QLineEdit:focus { border: 1px solid #7aa7ff; outline: none; }
+            QWidget#login_card {
+                background-color: qradialgradient(
+                    cx:0.9, cy:0.0, radius:1.4,
+                    fx:1.0, fy:0.0,
+                    stop:0  rgba(236,72,153,0.25),
+                    stop:0.4 rgba(24,31,81,0.90),
+                    stop:1  #020617
+                );
+                border-radius: 20px;
+                border: 1px solid rgba(148,163,184,0.45);
+            }
         """)
+
         lay = QVBoxLayout(card); lay.setContentsMargins(30,20,30,20); lay.setSpacing(15)
         lay.addLayout(form); lay.addWidget(self.err); lay.addSpacing(8); lay.addWidget(self.btn_login,0,Qt.AlignHCenter)
 
@@ -342,7 +565,23 @@ class ProfileScreen(QWidget):
         self.btn_save.setEnabled(editing)
         self.btn_cancel.setEnabled(editing)
 
-        self.setStyleSheet("QLineEdit:read-only { background: #f6f6f6; }")
+        self.setStyleSheet("""
+            QLineEdit {
+                background-color: #020617;
+                border: 1px solid #1f2937;
+                border-radius: 10px;
+                padding: 6px 10px;
+                color: #e5e7eb;
+            }
+            QLineEdit:read-only {
+                background-color: #020617;
+                color: #9ca3af;
+            }
+            QCheckBox {
+                color: #e5e7eb;
+            }
+        """)
+
 
     def reset_fields_from_snapshot(self):
         self.in_name.setText(self.snapshot["name"])
@@ -619,13 +858,16 @@ class RideRequestPage(QWidget):
         self.btn_cancel.clicked.connect(self.on_cancel_clicked)
 
         
+        # NEW: chat button
+        self.btn_chat = QPushButton("Open chat")
+        self.btn_chat.setEnabled(False)
+        self.btn_chat.clicked.connect(self.on_open_chat)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
         form.setFormAlignment(Qt.AlignCenter | Qt.AlignTop)
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
-
         form.addRow("Area:", self.in_area)
         form.addRow("Direction:", self.cb_direction)
         form.addRow("Departure Time:", self.dt)
@@ -634,6 +876,7 @@ class RideRequestPage(QWidget):
         self.err.setWordWrap(True)
         self.err.setStyleSheet("color: red;")
         self.err.setVisible(False)
+
         self.ok  = QLabel("")
         self.ok.setWordWrap(True)
         self.ok.setStyleSheet("color: #0a7a0a;")
@@ -642,14 +885,18 @@ class RideRequestPage(QWidget):
         self.lbl_request_id = QLabel("Request ID: —")
         self.lbl_status     = QLabel("Status: —")
 
+        self.current_request_id = None
+
         root = QVBoxLayout(self)
         root.addLayout(form)
+
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(self.btn_submit)
         row.addWidget(self.btn_cancel)
         row.addStretch(1)
         root.addLayout(row)
+
         root.addSpacing(10)
         root.addWidget(self.err)
         root.addWidget(self.ok)
@@ -668,6 +915,14 @@ class RideRequestPage(QWidget):
 
     def _iso_string(self) -> str:
         return self.dt.dateTime().toString("yyyy-MM-dd HH:mm")
+    
+    def on_open_chat(self):
+        if not self.current_request_id:
+            self.show_error("No active request to chat about.")
+            return
+        dlg = ChatDialog(self.session, self.current_request_id, self)
+        dlg.exec_()
+
 
     def on_submit(self):
         area = self.in_area.text().strip()
@@ -786,12 +1041,47 @@ class DriverRidePage(QWidget):
         super().__init__(parent)
         self.session = session
 
+        # ---- Accepted rides (active) ----
+        self.lbl_matches = QLabel("Accepted rides (active):")
+
+        self.table_matches = QTableWidget(0, 4)
+        self.table_matches.setHorizontalHeaderLabels(["Req ID", "Area", "Direction", "Time"])
+        self.table_matches.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_matches.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table_matches.setSelectionMode(QTableWidget.SingleSelection)
+
+        self.btn_matches_refresh = QPushButton("Refresh accepted")
+        self.btn_matches_complete = QPushButton("Complete / remove selected")
+        self.btn_open_chat = QPushButton("Open chat")
+
+        self.btn_matches_refresh.clicked.connect(self.refresh_matches)
+        self.btn_matches_complete.clicked.connect(self.on_complete_selected)
+        self.btn_open_chat.clicked.connect(self.on_open_chat)
+
+        btns_matches = QHBoxLayout()
+        btns_matches.addWidget(self.btn_matches_refresh)
+        btns_matches.addWidget(self.btn_matches_complete)
+        btns_matches.addStretch(1)
+        btns_matches.addWidget(self.btn_open_chat)
+
+        # ---- Open requests table ----
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Request ID", "Area", "Direction", "Departure Time"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
 
+        self.btn_refresh = QPushButton("Refresh now")
+        self.btn_accept = QPushButton("Accept selected")
+        self.btn_refresh.clicked.connect(self.refresh)
+        self.btn_accept.clicked.connect(self.on_accept_selected)
+
+        top = QHBoxLayout()
+        top.addWidget(self.btn_refresh)
+        top.addWidget(self.btn_accept)
+        top.addStretch(1)
+
+        # ---- Status labels ----
         self.err = QLabel("")
         self.err.setWordWrap(True)
         self.err.setStyleSheet("color: red;")
@@ -802,32 +1092,26 @@ class DriverRidePage(QWidget):
         self.ok.setStyleSheet("color: #0a7a0a;")
         self.ok.setVisible(False)
 
-        self.btn_refresh = QPushButton("Refresh now")
-        self.btn_accept = QPushButton("Accept selected")
-
-        self.btn_refresh.clicked.connect(self.refresh)
-        self.btn_accept.clicked.connect(self.on_accept_selected)
-
-        top = QHBoxLayout()
-        top.addWidget(self.btn_refresh)
-        top.addWidget(self.btn_accept)
-        top.addStretch(1)
-
+        # ---- Root layout ----
         root = QVBoxLayout(self)
+        root.addSpacing(16)
+        root.addWidget(self.lbl_matches)
+        root.addWidget(self.table_matches, 1)
+        root.addLayout(btns_matches)
+        root.addSpacing(10)
         root.addLayout(top)
         root.addWidget(self.err)
         root.addWidget(self.ok)
         root.addSpacing(6)
         root.addWidget(self.table, 1)
 
-        # auto-refresh every 5 seconds
+        # manual refresh only for now (timer caused response mix-ups)
         self.timer = QTimer(self)
-        self.timer.setInterval(5000)
-        self.timer.timeout.connect(self.refresh)
+        self.timer.setInterval(3000)
+        self.timer.timeout.connect(self._periodic_refresh)
         self.timer.start()
 
-        self.refresh()
-
+    # ---------------- helpers ----------------
     def show_error(self, msg):
         self.err.setText(msg)
         self.err.setVisible(True)
@@ -840,7 +1124,37 @@ class DriverRidePage(QWidget):
 
     def refresh(self):
         req = {
-            "type": "RIDE.LIST_REQ",
+            "type": "RIDE.COMPLETE_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {"request_id": req_id},
+        }
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error (complete): {e}")
+            return
+
+        if resp.get("type") == "RIDE.COMPLETE_RES":
+            self.show_ok(f"Ride {req_id} marked as completed.")
+            self.table_matches.clearSelection()
+            self.refresh_matches()
+        else:
+            self.show_error(resp.get("payload", {}).get("message",
+                             "Failed to complete ride."))
+
+    # ---------------- open requests (to accept) ----------------
+    def refresh(self, preserve_selection: bool = False):
+        """Load compatible open ride requests for this driver."""
+        selected_req_id = None
+        if preserve_selection:
+            r = self.table.currentRow()
+            if r >= 0:
+                item0 = self.table.item(r, 0)
+                if item0 is not None:
+                    selected_req_id = item0.data(Qt.UserRole)
+
+        req = {
+            "type": "RIDE.DRIVER_OPEN_REQS_REQ",
             "id": str(uuid.uuid4()),
             "payload": {},
         }
@@ -850,8 +1164,10 @@ class DriverRidePage(QWidget):
             self.show_error(f"Network error: {e}")
             return
 
-        if resp.get("type") != "RIDE.LIST_RES":
-            self.show_error(resp.get("payload", {}).get("message", f"Unexpected response: {resp.get('type')}"))
+        if resp.get("type") != "RIDE.DRIVER_OPEN_REQS_RES":
+            self.show_error(resp.get("payload", {}).get(
+                "message", f"Unexpected response: {resp.get('type')}"
+            ))
             return
 
         items = resp.get("payload", {}).get("items", [])
@@ -867,13 +1183,20 @@ class DriverRidePage(QWidget):
             time_iso = item.get("time_iso", "—")
 
             c0 = QTableWidgetItem(req_id)
-            # store raw request_id in UserRole, to send later
-            c0.setData(Qt.UserRole, req_id)
+            c0.setData(Qt.UserRole, req_id)  # store raw request_id
 
             self.table.setItem(row, 0, c0)
             self.table.setItem(row, 1, QTableWidgetItem(area))
             self.table.setItem(row, 2, QTableWidgetItem(direction))
             self.table.setItem(row, 3, QTableWidgetItem(time_iso))
+
+        # re-select previously selected request if it still exists
+        if preserve_selection and selected_req_id:
+            for row in range(self.table.rowCount()):
+                item0 = self.table.item(row, 0)
+                if item0 and item0.data(Qt.UserRole) == selected_req_id:
+                    self.table.selectRow(row)
+                    break
 
         self.show_ok(f"Loaded {len(items)} compatible requests.")
 
@@ -912,6 +1235,7 @@ class DriverRidePage(QWidget):
             self.show_ok(f"Accepted {req_id}.")
             self.table.clearSelection()
             self.refresh()
+            self.refresh_matches()
         elif rtype == "ERROR":
             code = payload.get("code")
             msg = payload.get("message", "Failed to accept request.")
@@ -940,6 +1264,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AUBus")
+        self.setObjectName("MainWindow")
         self.resize(1000, 650)
 
         # Persistent session (used by login + profile + schedule + ride)
@@ -969,6 +1294,7 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(app_page)
 
         left = QWidget()
+        left.setObjectName("SideBar")
         left_l = QVBoxLayout(left)
         self.btn_profile = QPushButton("Profile")
         self.btn_sched   = QPushButton("Schedule")
@@ -1005,12 +1331,19 @@ class MainWindow(QMainWindow):
         self.btn_profile.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         self.btn_sched.clicked.connect(lambda: self.stack.setCurrentIndex(1))
         self.btn_ride.clicked.connect(lambda: self.stack.setCurrentIndex(2))
+        self.btn_chat.clicked.connect(self.on_chat_clicked)
+
 
         self.btn_profile.setChecked(True)
         self.stack.setCurrentIndex(0)
 
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(16, 16, 16, 16)
+        center_layout.addWidget(self.stack)
+
         h.addWidget(left)
-        h.addWidget(self.stack, 1)
+        h.addWidget(center, 1)
 
         # connect login signal
         self.login_tab.logged_in.connect(self.after_login)
@@ -1022,6 +1355,22 @@ class MainWindow(QMainWindow):
         self.btn_sched.setEnabled(bool(on))
         if hasattr(self, "schedule_page"):
             self.schedule_page.setEnabled(bool(on))
+    
+    def on_chat_clicked(self):
+        # Show the Ride page (index 2 in the stack)
+        self.stack.setCurrentIndex(2)
+
+        # Mark Chat as selected in the sidebar
+        self.btn_chat.setChecked(True)
+
+        # Focus the driver side and its accepted-rides table as “chat options”
+        if hasattr(self, "ride_page") and hasattr(self.ride_page, "driver_page"):
+            # switch to driver tab if your RidePage uses tabs
+            if hasattr(self.ride_page, "tabs"):
+                self.ride_page.tabs.setCurrentWidget(self.ride_page.driver_page)
+            # put keyboard focus on the accepted rides list
+            self.ride_page.driver_page.table_matches.setFocus()
+
 
     def after_login(self, user_preview: dict):
         # Profile screen
@@ -1065,11 +1414,13 @@ class MainWindow(QMainWindow):
             self.stack.removeWidget(self.ride_page)
             self.ride_page.deleteLater()
 
+        # create the correct ride page for current mode
         if is_driver:
             self.ride_page = DriverRidePage(self.session)
         else:
             self.ride_page = RideRequestPage(self.session)
 
+        # insert it at index 2 (Ride tab)
         self.stack.insertWidget(2, self.ride_page)
 
     def closeEvent(self, event):
@@ -1224,13 +1575,16 @@ class MainWindow(QMainWindow):
 
 
 
-
-
 def main():
     app = QApplication(sys.argv)
+
+    # APPLY THE THEME HERE
+    apply_bento_theme(app)
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     main()

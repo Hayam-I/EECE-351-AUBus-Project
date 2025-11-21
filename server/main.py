@@ -108,6 +108,173 @@ def _send_json_safe(sock: socket.socket, obj: dict):
     except Exception:
         logging.exception("send failed")
 
+def _driver_open_requests_list(driver_id: int, mid):
+    """Return all *open* ride requests that were broadcast to this driver."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        items = []
+        # ACTIVE_REQUEST_DRIVERS: req_id_str -> set(driver_ids)
+        for req_id_str, drivers in list(ACTIVE_REQUEST_DRIVERS.items()):
+            if driver_id not in drivers:
+                continue
+            req_id_int = _reqid_to_int(req_id_str)
+            if req_id_int is None:
+                continue
+
+            cur.execute("""
+                SELECT user_id, area, direction, departure_time, status
+                FROM ride_req
+                WHERE request_id=?
+            """, (req_id_int,))
+            row = cur.fetchone()
+            if not row:
+                continue
+
+            user_id, area, direction, departure_time, status = row
+            if status != "open":
+                continue  # ignore matched/completed/cancelled
+
+            items.append({
+                "request_id": req_id_str,
+                "passenger_user_id": f"user_{user_id}",
+                "area": area,
+                "direction": direction,
+                "time_iso": departure_time,
+            })
+
+        conn.close()
+
+        return {
+            "type": "RIDE.DRIVER_OPEN_REQS_RES",
+            "id": mid,
+            "payload": {"items": items},
+        }
+
+    except Exception:
+        logging.exception("_driver_open_requests_list failed")
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "SERVER_ERROR", "message": "Failed to list requests"},
+        }
+
+
+def _chat_send(conn_state, payload, mid):
+    uid = conn_state.get("user_id")
+    if not uid:
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "FORBIDDEN", "message": "Login required"},
+        }
+
+    p = payload or {}
+    req_s = p.get("request_id")
+    text = p.get("text", "").strip()
+    req_id_int = _reqid_to_int(req_s)
+
+    if not isinstance(req_id_int, int) or not text:
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "BAD_REQUEST", "message": "request_id and non-empty text required"},
+        }
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        # optional: verify request exists
+        cur.execute("SELECT 1 FROM ride_req WHERE request_id=?", (req_id_int,))
+        if not cur.fetchone():
+            conn.close()
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {"code": "NOT_FOUND", "message": "Request not found"},
+            }
+
+        cur.execute(
+            "INSERT INTO ride_chat(request_id, sender_id, text) VALUES (?, ?, ?)",
+            (req_id_int, uid, text),
+        )
+        msg_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return {
+            "type": "RIDE.CHAT_SEND_RES",
+            "id": mid,
+            "payload": {"message_id": msg_id},
+        }
+    except Exception:
+        logging.exception("_chat_send failed")
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "SERVER_ERROR", "message": "Failed to send message"},
+        }
+
+
+def _chat_poll(conn_state, payload, mid):
+    uid = conn_state.get("user_id")
+    if not uid:
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "FORBIDDEN", "message": "Login required"},
+        }
+
+    p = payload or {}
+    req_s = p.get("request_id")
+    after_id = p.get("after_message_id", 0)
+    req_id_int = _reqid_to_int(req_s)
+
+    if not isinstance(req_id_int, int):
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "BAD_REQUEST", "message": "request_id required"},
+        }
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT message_id, sender_id, text, sent_at
+            FROM ride_chat
+            WHERE request_id=? AND message_id>?
+            ORDER BY message_id ASC
+            """,
+            (req_id_int, int(after_id)),
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        messages = []
+        for mid_int, sender_id, text, sent_at in rows:
+            messages.append({
+                "message_id": mid_int,
+                "sender_user_id": f"user_{sender_id}",
+                "text": text,
+                "sent_at": sent_at,
+            })
+
+        return {
+            "type": "RIDE.CHAT_POLL_RES",
+            "id": mid,
+            "payload": {"messages": messages},
+        }
+    except Exception:
+        logging.exception("_chat_poll failed")
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "SERVER_ERROR", "message": "Failed to fetch messages"},
+        }
 
 # ---------------------------------------------------------
 # Validation helpers (time/registration/login/schedule/requests)
@@ -749,6 +916,7 @@ def _ride_accept(conn_state, payload, mid):
             return {"type":"ERROR","id":mid,"payload":{
                 "code":"REQUEST_CLOSED","message":"request not open"}}
 
+        
         conn.commit()
         conn.close()
 
@@ -1059,9 +1227,14 @@ def handle_message(msg: dict, conn_state: dict):
                 SELECT s.user_id, s.depart_time
                 FROM schedules s
                 JOIN users u ON u.user_id = s.user_id
-                WHERE s.weekday=? AND s.area=? AND s.direction=? AND u.is_driver=1
+                WHERE s.weekday=? AND lower(s.area)=lower(?) AND s.direction=? AND u.is_driver=1
             """, (weekday_sun0, area, direction))
+
             rows = cur.fetchall()
+            logging.info(
+                "RIDE.REQUEST_REQ uid=%s weekday=%s area=%r direction=%s rows=%r",
+                uid, weekday_sun0, area, direction, rows
+            )
             conn.commit()
             conn.close()
 
@@ -1200,7 +1373,6 @@ def handle_message(msg: dict, conn_state: dict):
                     "message": "Failed to list ride requests",
                 },
             }
-
         
     if mtype == "RIDE.ACCEPT_REQ":
         return _ride_accept(conn_state, payload, mid)
