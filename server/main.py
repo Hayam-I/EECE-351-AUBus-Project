@@ -799,7 +799,7 @@ def _ride_accept(conn_state, payload, mid):
     with STATE_LOCK:
         ACTIVE_REQUEST_DRIVERS.pop(f"req_{req_id_int}", None)
         _REQUEST_LAST_TOUCH.pop(f"req_{req_id_int}", None)
-        REQUEST_PASSENGERS.pop(f"req_{req_id_int}", None)
+        #REQUEST_PASSENGERS.pop(f"req_{req_id_int}", None)
 
     return {"type":"RIDE.ACCEPT_RES", "id":mid, "payload":{
         "request_id": f"req_{req_id_int}"
@@ -833,10 +833,13 @@ def _ride_complete(conn_state, payload, mid):
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("UPDATE matches SET status='completed' WHERE request_id=? AND driver_id=?", (req_id_int, driver_id))
-        cur.execute(
-        "UPDATE ride_req SET status='completed' WHERE request_id=?",
-        (req_id_int,)
-        )
+        try:
+            cur.execute(
+            "UPDATE ride_req SET status='completed' WHERE request_id=?",
+            (req_id_int,)
+            )
+        except Exception:
+            pass
 
         conn.commit()
         conn.close()
@@ -846,6 +849,22 @@ def _ride_complete(conn_state, payload, mid):
             "code":"SERVER_ERROR",
             "message":"Internal error"
         }}
+    req_key = f"req_{req_id_int}"
+    passenger = REQUEST_PASSENGERS.get(req_key)
+    if passenger and passenger.get("sock"):
+        try:
+            _send_json_safe(passenger["sock"], {
+                "type": "REQUEST.CLOSED",
+                "id": str(uuid.uuid4()),
+                "payload":{
+                    "request_id":req_key,
+                    "winner_user_id":f"user_{driver_id}",
+                    "reason":"completed"
+                }
+            })
+        except Exception:
+            logging.exception("notify passenger ride complete")
+    REQUEST_PASSENGERS.pop(req_key, None)
     _free_driver(driver_id)
     return {"type":"RIDE.COMPLETE_RES", "id":mid, "payload":{}}
 
