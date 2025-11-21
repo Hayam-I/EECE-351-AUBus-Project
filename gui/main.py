@@ -4,13 +4,15 @@ import json
 import re
 import socket
 import uuid
+import threading
+import logging
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QDialog, QTextEdit
+    QHeaderView, QTimeEdit, QDateTimeEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
 
 # ===== error popup for uncaught exceptions =====
 def excepthook(exc_type, exc, tb):
@@ -38,209 +40,6 @@ def title_page(text):
     v.addStretch(1)
     return w
 
-
-def apply_bento_theme(app: QApplication):
-    app.setStyle("Fusion")  # more modern base style
-
-    app.setStyleSheet("""
-    /* ====== Global background ====== */
-    QMainWindow#MainWindow, QWidget {
-        background-color: #020617; /* very dark navy */
-        color: #e5e7eb;
-        font-family: "Segoe UI", system-ui, sans-serif;
-        font-size: 10pt;
-    }
-
-    /* ====== Sidebar ====== */
-    QWidget#SideBar {
-        background-color: #020617;
-        border-right: 1px solid #1f2937;
-    }
-
-    QWidget#SideBar QPushButton {
-        background-color: transparent;
-        border: none;
-        color: #9ca3af;
-        padding: 8px 14px;
-        text-align: left;
-        border-radius: 10px;
-    }
-
-    QWidget#SideBar QPushButton:hover {
-        background-color: rgba(99,102,241,0.18); /* soft indigo */
-        color: #e5e7eb;
-    }
-
-    QWidget#SideBar QPushButton:checked {
-        background-color: #4f46e5; /* primary indigo */
-        color: #f9fafb;
-    }
-
-    /* ====== Cards / panels ====== */
-    QStackedWidget, QWidget#login_card, QWidget#register_card {
-        background-color: #020617;
-        border-radius: 18px;
-    }
-
-    QWidget#login_card, QWidget#register_card {
-        border: 1px solid rgba(148,163,184,0.35);
-        background-color: qlineargradient(
-            x1:0, y1:0, x2:1, y2:1,
-            stop:0 #020617,
-            stop:1 #020617
-        );
-    }
-    
-    QLabel {
-        color: #e5e7eb;
-        background-color: transparent;   /* <<< this removes the black box */
-        border: none;
-    }
-
-    QLabel#page_title {
-        font-size: 18pt;
-        font-weight: 600;
-        color: #e5e7eb;
-    }
-
-    /* ====== Inputs ====== */
-    QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
-        background-color: rgba(255,255,255,0.04);
-        border: 1px solid rgba(148,163,184,0.25); 
-        border-radius: 8px;
-        padding: 6px 10px;
-        color: #e5e7eb;
-        selection-background-color: #4f46e5;
-        selection-color: #f9fafb;
-    }
-
-    QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
-        border: 1px solid #6366f1;
-        box-shadow: 0px 0px 6px rgba(99,102,241,0.45);
-        background-color: rgba(255,255,255,0.07);
-    }
-
-    QComboBox QAbstractItemView {
-        background-color: #020617;
-        border: 1px solid #1f2937;
-        selection-background-color: #4f46e5;
-        selection-color: #f9fafb;
-    }
-
-    /* ====== Primary / secondary buttons ====== */
-    QPushButton {
-        background-color: #111827;
-        color: #e5e7eb;
-        border-radius: 10px;
-        padding: 6px 14px;
-        border: 1px solid #1f2937;
-    }
-
-    QPushButton:hover {
-        background-color: #1f2937;
-        border-color: #4b5563;
-    }
-
-    QPushButton:pressed {
-        background-color: #4f46e5;
-        border-color: #4f46e5;
-        color: #f9fafb;
-    }
-
-    QPushButton:disabled {
-        background-color: #020617;
-        color: #4b5563;
-        border-color: #111827;
-    }
-
-    /* ====== Tables ====== */
-    QTableWidget {
-        background-color: #020617;
-        alternate-background-color: #020617;
-        border: 1px solid #111827;
-        border-radius: 14px;
-        gridline-color: #111827;
-        selection-background-color: rgba(129,140,248,0.25);
-        selection-color: #f9fafb;
-    }
-
-    QHeaderView::section {
-        background-color: #020617;
-        color: #9ca3af;
-        padding: 6px 8px;
-        border: none;
-        border-bottom: 1px solid #111827;
-    }
-
-    QTableCornerButton::section {
-        background-color: #020617;
-        border: none;
-    }
-
-    /* Scrollbars (subtle) */
-    QScrollBar:vertical, QScrollBar:horizontal {
-        background: #020617;
-        border-radius: 4px;
-        width: 10px;
-        height: 10px;
-        margin: 2px;
-    }
-
-    QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-        background: #111827;
-        border-radius: 4px;
-    }
-
-    QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-        background: #4b5563;
-    }
-
-    QScrollBar::add-line, QScrollBar::sub-line {
-        width: 0;
-        height: 0;
-        background: transparent;
-    }
-
-    /* Status labels */
-    QLabel {
-        color: #e5e7eb;
-    }
-
-    QLabel[style*="color: red"] {
-        color: #f97373;
-    }
-
-    QLabel[style*="#0a7a0a"] {
-        color: #4ade80;
-    }
-
-    QTabWidget::pane {
-        border: 1px solid #111827;
-        border-radius: 14px;
-        background-color: #020617;
-    }
-
-    QTabBar::tab {
-        background-color: transparent;
-        color: #9ca3af;
-        padding: 6px 16px;
-        border-radius: 10px;
-        margin: 4px;
-    }
-
-    QTabBar::tab:selected {
-        background-color: #4f46e5;
-        color: #f9fafb;
-    }
-
-    QTabBar::tab:hover {
-        background-color: rgba(79,70,229,0.25);
-        color: #e5e7eb;
-    }
-    """)
-
-
-
 # ===== validation regex (mirror server) =====
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$")
 PASSWORD_RE = re.compile(r"^.{6,20}$")
@@ -249,12 +48,17 @@ EMAIL_RE    = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 # =============================================================================
 # Persistent JSONL session (one TCP connection per client after login)
 # =============================================================================
-class JsonlSession:
-    def __init__(self, host: str, port: int, timeout: float = 4.0):
+class JsonlSession(QObject):
+    push_reveived = pyqtSignal(dict)
+    def __init__(self, host: str, port: int, timeout: float = 4.0, parent=None):
+        super().__init__(parent)
         self.host = host
         self.port = port
         self.timeout = timeout
         self.sock: socket.socket | None = None
+    
+    def handle_push(self, msg: dict):
+        self.push_reveived.emit(msg)
 
     def ensure_connected(self):
         if self.sock is not None:
@@ -263,11 +67,42 @@ class JsonlSession:
         s.settimeout(self.timeout)
         self.sock = s
 
-    def request(self, obj: dict) -> dict:
-        """Send 1 request, wait for 1 response, over the SAME socket."""
+    def request(self, env: dict) -> dict:
+        """Send 1 request, wait for 1 response, over the SAME socket. ignore push messages"""
+        if not isinstance(env, dict):
+            raise TypeError("JsonlSession.request expects a dict envelope")
+        
         self.ensure_connected()
-        send_json(self.sock, obj)
-        return recv_json(self.sock)
+
+        mid = env.get("id")
+        if not mid:
+            mid = str(uuid.uuid4)
+            env["id"] = mid
+
+        if "payload" not in env or env["payload"] is None:
+            env["paylaod"] = {}
+
+        send_json(self.sock, env)
+
+        while True:
+            msg = recv_json(self.sock)
+            if msg is None:
+                # timeout or EOF – adjust error handling
+                raise RuntimeError(f"Timeout or disconnect waiting for response to {env.get('type')}")
+            if msg.get("id") == mid:
+                return msg
+
+            # Otherwise, treat as push / unsolicited
+            t = msg.get("type")
+            if t in ("RIDE.MATCHED", "REQUEST_CLOSED", "DRIVER.BROADCAST"):
+                self.handle_push(msg)
+                continue
+
+            # Stray message with some other id; log and ignore
+            logging.warning("JsonlSession: ignoring unsolicited message: %r", msg)
+
+
+      
 
     def close(self):
         try:
@@ -307,22 +142,12 @@ class RegisterForm(QWidget):
         self.btn_register = QPushButton("Create account"); self.btn_register.setMinimumWidth(120)
         self.btn_register.clicked.connect(self.on_submit)
 
-        card = QWidget()
-        card.setObjectName("register_card")
+        card = QWidget(); card.setObjectName("register_card")
         card.setStyleSheet("""
-            QWidget#register_card {
-                background-color: qradialgradient(
-                    cx:0.1, cy:0.0, radius:1.4,
-                    fx:0.0, fy:0.0,
-                    stop:0  rgba(129,140,248,0.25),
-                    stop:0.4 rgba(24,31,81,0.90),
-                    stop:1  #020617
-                );
-                border-radius: 20px;
-                border: 1px solid rgba(148,163,184,0.45);
-            }
+            QWidget#register_card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; }
+            QLineEdit { padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; }
+            QLineEdit:focus { border: 1px solid #7aa7ff; outline: none; }
         """)
-
         lay = QVBoxLayout(card); lay.setContentsMargins(30,20,30,20); lay.setSpacing(15)
         lay.addLayout(form); lay.addWidget(self.err); lay.addSpacing(8); lay.addWidget(self.btn_register,0,Qt.AlignHCenter)
 
@@ -404,22 +229,12 @@ class LoginForm(QWidget):
         self.btn_login = QPushButton("Log into account"); self.btn_login.setMinimumWidth(120)
         self.btn_login.clicked.connect(self.on_submit)
 
-        card = QWidget()
-        card.setObjectName("login_card")
+        card = QWidget(); card.setObjectName("login_card")
         card.setStyleSheet("""
-            QWidget#login_card {
-                background-color: qradialgradient(
-                    cx:0.9, cy:0.0, radius:1.4,
-                    fx:1.0, fy:0.0,
-                    stop:0  rgba(236,72,153,0.25),
-                    stop:0.4 rgba(24,31,81,0.90),
-                    stop:1  #020617
-                );
-                border-radius: 20px;
-                border: 1px solid rgba(148,163,184,0.45);
-            }
+            QWidget#login_card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; }
+            QLineEdit { padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; }
+            QLineEdit:focus { border: 1px solid #7aa7ff; outline: none; }
         """)
-
         lay = QVBoxLayout(card); lay.setContentsMargins(30,20,30,20); lay.setSpacing(15)
         lay.addLayout(form); lay.addWidget(self.err); lay.addSpacing(8); lay.addWidget(self.btn_login,0,Qt.AlignHCenter)
 
@@ -527,23 +342,7 @@ class ProfileScreen(QWidget):
         self.btn_save.setEnabled(editing)
         self.btn_cancel.setEnabled(editing)
 
-        self.setStyleSheet("""
-            QLineEdit {
-                background-color: #020617;
-                border: 1px solid #1f2937;
-                border-radius: 10px;
-                padding: 6px 10px;
-                color: #e5e7eb;
-            }
-            QLineEdit:read-only {
-                background-color: #020617;
-                color: #9ca3af;
-            }
-            QCheckBox {
-                color: #e5e7eb;
-            }
-        """)
-
+        self.setStyleSheet("QLineEdit:read-only { background: #f6f6f6; }")
 
     def reset_fields_from_snapshot(self):
         self.in_name.setText(self.snapshot["name"])
@@ -677,6 +476,14 @@ class ScheduleScreen(QWidget):
         return self.time_edit.time().toString("HH:mm")
 
     def refresh(self):
+        # remember currently selected schedule_id (if any)
+        current_row = self.table.currentRow()
+        selected_sched_id = None
+        if current_row >= 0:
+            item0 = self.table.item(current_row, 0)
+            if item0 is not None:
+                selected_sched_id = item0.data(Qt.UserRole)
+
         req = {
             "type": "SCHEDULE.LIST_REQ",
             "id": str(uuid.uuid4()),
@@ -689,8 +496,12 @@ class ScheduleScreen(QWidget):
             return
 
         if resp.get("type") != "SCHEDULE.LIST_RES":
-            self.show_error(resp.get("payload", {}).get("message",
-                            f"Unexpected response: {resp.get('type')}"))
+            self.show_error(
+                resp.get("payload", {}).get(
+                    "message",
+                    f"Unexpected response: {resp.get('type')}"
+                )
+            )
             return
 
         items = resp.get("payload", {}).get("items", [])
@@ -702,17 +513,29 @@ class ScheduleScreen(QWidget):
 
             wd_idx = item["weekday"]
             wd = ["Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"][wd_idx] \
-                    if 0 <= wd_idx <= 6 else str(wd_idx)
+                if 0 <= wd_idx <= 6 else str(wd_idx)
 
             c0 = QTableWidgetItem(wd)
-            c0.setData(Qt.UserRole, item["schedule_id"])   # schedule_id stored here
+            # store schedule_id here
+            c0.setData(Qt.UserRole, item["schedule_id"])
 
             self.table.setItem(row, 0, c0)
             self.table.setItem(row, 1, QTableWidgetItem(item["depart_time"]))
             self.table.setItem(row, 2, QTableWidgetItem(item["direction"]))
             self.table.setItem(row, 3, QTableWidgetItem(item["area"]))
 
-        self.show_ok(f"Loaded {len(items)} slots.")
+        # try to reselect previous schedule if it still exists
+        if selected_sched_id is not None:
+            for row in range(self.table.rowCount()):
+                item0 = self.table.item(row, 0)
+                if item0 is not None and item0.data(Qt.UserRole) == selected_sched_id:
+                    self.table.setCurrentCell(row, 0)
+                    break
+
+        # up to you if you keep this; it will pop a dialog every refresh
+        # self.show_ok(f"Loaded {len(items)} slots.")
+
+
 
 
 
@@ -775,6 +598,8 @@ class RideRequestPage(QWidget):
         super().__init__(parent)
         self.session = session
 
+        self.current_request_id: str | None = None
+
         self.in_area = QLineEdit()
         self.in_area.setPlaceholderText("e.g Hamra")
 
@@ -789,16 +614,18 @@ class RideRequestPage(QWidget):
         self.btn_submit = QPushButton("Request Ride")
         self.btn_submit.clicked.connect(self.on_submit)
 
-        # NEW: chat button
-        self.btn_chat = QPushButton("Open chat")
-        self.btn_chat.setEnabled(False)
-        self.btn_chat.clicked.connect(self.on_open_chat)
+        self.btn_cancel = QPushButton("Cancel request")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.on_cancel_clicked)
+
+        
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
         form.setFormAlignment(Qt.AlignCenter | Qt.AlignTop)
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
+
         form.addRow("Area:", self.in_area)
         form.addRow("Direction:", self.cb_direction)
         form.addRow("Departure Time:", self.dt)
@@ -807,7 +634,6 @@ class RideRequestPage(QWidget):
         self.err.setWordWrap(True)
         self.err.setStyleSheet("color: red;")
         self.err.setVisible(False)
-
         self.ok  = QLabel("")
         self.ok.setWordWrap(True)
         self.ok.setStyleSheet("color: #0a7a0a;")
@@ -816,18 +642,14 @@ class RideRequestPage(QWidget):
         self.lbl_request_id = QLabel("Request ID: —")
         self.lbl_status     = QLabel("Status: —")
 
-        self.current_request_id = None
-
         root = QVBoxLayout(self)
         root.addLayout(form)
-
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(self.btn_submit)
-        row.addWidget(self.btn_chat)   # chat button here
+        row.addWidget(self.btn_cancel)
         row.addStretch(1)
         root.addLayout(row)
-
         root.addSpacing(10)
         root.addWidget(self.err)
         root.addWidget(self.ok)
@@ -835,6 +657,8 @@ class RideRequestPage(QWidget):
         root.addWidget(self.lbl_request_id)
         root.addWidget(self.lbl_status)
         root.addStretch(1)
+
+        self.set_idle_state()
 
     def show_error(self, msg):
         self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
@@ -844,14 +668,6 @@ class RideRequestPage(QWidget):
 
     def _iso_string(self) -> str:
         return self.dt.dateTime().toString("yyyy-MM-dd HH:mm")
-    
-    def on_open_chat(self):
-        if not self.current_request_id:
-            self.show_error("No active request to chat about.")
-            return
-        dlg = ChatDialog(self.session, self.current_request_id, self)
-        dlg.exec_()
-
 
     def on_submit(self):
         area = self.in_area.text().strip()
@@ -876,64 +692,106 @@ class RideRequestPage(QWidget):
         p = resp.get("payload", {})
 
         if rtype == "RIDE.REQUEST_RES":
-            req_id = p.get("request_id", "—")
-            self.current_request_id = req_id
-            self.btn_chat.setEnabled(True)
+            req_id = p.get("request_id")
             found  = p.get("candidates_found", 0)
+
+            self.current_request_id = req_id
+            self.btn_cancel.setEnabled(True)
+            self.btn_submit.setEnabled(False)
+
             self.lbl_request_id.setText(f"Request ID: {req_id}")
+            
             self.lbl_status.setText(f"Status: open — compatible drivers found: {found}")
             self.show_ok("Ride request created.")
+
         elif rtype == "ERROR":
-            self.show_error(p.get("message", "Failed to create ride request."))
+            code = p.get("code")
+            msg = p.get("message", "Failed to create ride request")
+
+            #self.show_error(p.get("message", "Failed to create ride request."))
+            if code == "PASSENGER_BUSY":
+                self.current_request_id = None
+                self.btn_cancel.setEnabled(False)
+            self.show_error(msg)
         else:
             self.show_error(f"Unexpected response: {rtype}")
+
+    def on_cancel_clicked(self):
+        if not self.current_request_id:
+            self.show_error("No active request to cancel.")
+            return
+        
+        
+
+        req = {
+            "type": "RIDE.CANCEL_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {"request_id": self.current_request_id},
+        }
+
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        rtype = resp.get("type")
+        payload = resp.get("payload", {})
+
+        if rtype == "RIDE.CANCEL_RES":
+            self.current_request_id = None
+            self.set_idle_state()
+            QMessageBox.information(self, "Request Cancelled", "Your ride request has been cancelled.")
+            return
+
+        elif rtype == "ERROR":
+            code = payload.get("code")
+            msg = payload.get("message", "Unknown error")
+            
+            if code == "INVALID_STATE":
+                QMessageBox.information(self, "Cannot cancel", "Your request has already been accepted by a driver so it not longer can be cancelled.")
+                return
+            QMessageBox.warning(self, "Cancel failed", f"Server returned error: {code or 'ERROR'} - {msg}")
+            return
+        
+        QMessageBox.warning(self, "Unexpected reply",
+                    f"Unexpected response to cancel: {rtype}")
+        
+
+    def handle_matched(self, payload):
+        self.lbl_status.setText("Status: A driver has accepted your request!")
+        self.btn_cancel.setEnabled(False)
+
+    def set_idle_state(self):
+        """Reset the page to 'no active ride request' state."""
+        self.current_request_id = None
+
+        try:
+            self.btn_cancel.setEnabled(False)
+        except AttributeError:
+            pass
+        try:
+            self.btn_submit.setEnabled(True)
+            self.lbl_request_id.setText("Request ID: —")
+            self.lbl_status.setText("Status: —")
+        except AttributeError:
+            pass
+        try:
+            self.lbl_status.setText("No active ride request.")
+        except AttributeError:
+            pass   
 
 class DriverRidePage(QWidget):
     def __init__(self, session: JsonlSession, parent=None):
         super().__init__(parent)
         self.session = session
 
-        # ---- Accepted rides (active) ----
-        self.lbl_matches = QLabel("Accepted rides (active):")
-
-        self.table_matches = QTableWidget(0, 4)
-        self.table_matches.setHorizontalHeaderLabels(["Req ID", "Area", "Direction", "Time"])
-        self.table_matches.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table_matches.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table_matches.setSelectionMode(QTableWidget.SingleSelection)
-
-        self.btn_matches_refresh = QPushButton("Refresh accepted")
-        self.btn_matches_complete = QPushButton("Complete / remove selected")
-        self.btn_open_chat = QPushButton("Open chat")
-
-        self.btn_matches_refresh.clicked.connect(self.refresh_matches)
-        self.btn_matches_complete.clicked.connect(self.on_complete_selected)
-        self.btn_open_chat.clicked.connect(self.on_open_chat)
-
-        btns_matches = QHBoxLayout()
-        btns_matches.addWidget(self.btn_matches_refresh)
-        btns_matches.addWidget(self.btn_matches_complete)
-        btns_matches.addStretch(1)
-        btns_matches.addWidget(self.btn_open_chat)
-
-        # ---- Open requests table ----
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Request ID", "Area", "Direction", "Departure Time"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
 
-        self.btn_refresh = QPushButton("Refresh now")
-        self.btn_accept = QPushButton("Accept selected")
-        self.btn_refresh.clicked.connect(self.refresh)
-        self.btn_accept.clicked.connect(self.on_accept_selected)
-
-        top = QHBoxLayout()
-        top.addWidget(self.btn_refresh)
-        top.addWidget(self.btn_accept)
-        top.addStretch(1)
-
-        # ---- Status labels ----
         self.err = QLabel("")
         self.err.setWordWrap(True)
         self.err.setStyleSheet("color: red;")
@@ -944,26 +802,32 @@ class DriverRidePage(QWidget):
         self.ok.setStyleSheet("color: #0a7a0a;")
         self.ok.setVisible(False)
 
-        # ---- Root layout ----
+        self.btn_refresh = QPushButton("Refresh now")
+        self.btn_accept = QPushButton("Accept selected")
+
+        self.btn_refresh.clicked.connect(self.refresh)
+        self.btn_accept.clicked.connect(self.on_accept_selected)
+
+        top = QHBoxLayout()
+        top.addWidget(self.btn_refresh)
+        top.addWidget(self.btn_accept)
+        top.addStretch(1)
+
         root = QVBoxLayout(self)
-        root.addSpacing(16)
-        root.addWidget(self.lbl_matches)
-        root.addWidget(self.table_matches, 1)
-        root.addLayout(btns_matches)
-        root.addSpacing(10)
         root.addLayout(top)
         root.addWidget(self.err)
         root.addWidget(self.ok)
         root.addSpacing(6)
         root.addWidget(self.table, 1)
 
-        # manual refresh only for now (timer caused response mix-ups)
+        # auto-refresh every 5 seconds
         self.timer = QTimer(self)
-        self.timer.setInterval(3000)
-        self.timer.timeout.connect(self._periodic_refresh)
+        self.timer.setInterval(5000)
+        self.timer.timeout.connect(self.refresh)
         self.timer.start()
 
-    # ---------------- helpers ----------------
+        self.refresh()
+
     def show_error(self, msg):
         self.err.setText(msg)
         self.err.setVisible(True)
@@ -974,126 +838,9 @@ class DriverRidePage(QWidget):
         self.ok.setVisible(True)
         self.err.setVisible(False)
 
-    def _periodic_refresh(self):
-        self.refresh(preserve_selection=True)
-        self.refresh_matches(preserve_selection=True)
-
-
-
-
-    # ---------------- accepted rides (matches) ----------------
-    def refresh_matches(self, preserve_selection: bool = False):
-        """Load all active matches for this driver."""
-        # --- save selection (optional) ---
-        selected_req_id = None
-        if preserve_selection:
-            r = self.table_matches.currentRow()
-            if r >= 0:
-                item0 = self.table_matches.item(r, 0)
-                if item0 is not None:
-                    selected_req_id = item0.data(Qt.UserRole) or item0.text()
-
+    def refresh(self):
         req = {
-            "type": "RIDE.DRIVER_MATCHES_REQ",
-            "id": str(uuid.uuid4()),
-            "payload": {},
-        }
-        try:
-            resp = self.session.request(req)
-        except Exception as e:
-            self.show_error(f"Network error (matches): {e}")
-            return
-
-        if resp.get("type") != "RIDE.DRIVER_MATCHES_RES":
-            self.show_error(resp.get("payload", {}).get(
-                "message", f"Unexpected response: {resp.get('type')}"
-            ))
-            return
-
-        items = resp.get("payload", {}).get("items", [])
-        self.table_matches.setRowCount(0)
-
-        # --- rebuild table ---
-        for item in items:
-            row = self.table_matches.rowCount()
-            self.table_matches.insertRow(row)
-
-            req_id = item.get("request_id", "—")
-            area = item.get("area", "—")
-            direction = item.get("direction", "—")
-            time_iso = item.get("time_iso", "—")
-
-            c0 = QTableWidgetItem(req_id)
-            c0.setData(Qt.UserRole, req_id)
-
-            self.table_matches.setItem(row, 0, c0)
-            self.table_matches.setItem(row, 1, QTableWidgetItem(area))
-            self.table_matches.setItem(row, 2, QTableWidgetItem(direction))
-            self.table_matches.setItem(row, 3, QTableWidgetItem(time_iso))
-
-        # --- restore selection if possible ---
-        if preserve_selection and selected_req_id:
-            for row in range(self.table_matches.rowCount()):
-                item0 = self.table_matches.item(row, 0)
-                if not item0:
-                    continue
-                value = item0.data(Qt.UserRole) or item0.text()
-                if value == selected_req_id:
-                    self.table_matches.selectRow(row)
-                    break
-
-        self.show_ok(f"Loaded {len(items)} accepted rides.")
-
-
-    def on_complete_selected(self):
-        """Mark an accepted ride as completed/removed."""
-        r = self.table_matches.currentRow()
-        if r < 0:
-            self.show_error("Select an accepted ride to complete/remove.")
-            return
-
-        item0 = self.table_matches.item(r, 0)
-        if not item0:
-            self.show_error("Internal error: missing request_id.")
-            return
-
-        req_id = item0.data(Qt.UserRole) or item0.text()
-        if not isinstance(req_id, str) or not req_id.startswith("req_"):
-            self.show_error("Internal error: invalid request_id.")
-            return
-
-        req = {
-            "type": "RIDE.COMPLETE_REQ",
-            "id": str(uuid.uuid4()),
-            "payload": {"request_id": req_id},
-        }
-        try:
-            resp = self.session.request(req)
-        except Exception as e:
-            self.show_error(f"Network error (complete): {e}")
-            return
-
-        if resp.get("type") == "RIDE.COMPLETE_RES":
-            self.show_ok(f"Ride {req_id} marked as completed.")
-            self.table_matches.clearSelection()
-            self.refresh_matches()
-        else:
-            self.show_error(resp.get("payload", {}).get("message",
-                             "Failed to complete ride."))
-
-    # ---------------- open requests (to accept) ----------------
-    def refresh(self, preserve_selection: bool = False):
-        """Load compatible open ride requests for this driver."""
-        selected_req_id = None
-        if preserve_selection:
-            r = self.table.currentRow()
-            if r >= 0:
-                item0 = self.table.item(r, 0)
-                if item0 is not None:
-                    selected_req_id = item0.data(Qt.UserRole)
-
-        req = {
-            "type": "RIDE.DRIVER_OPEN_REQS_REQ",
+            "type": "RIDE.LIST_REQ",
             "id": str(uuid.uuid4()),
             "payload": {},
         }
@@ -1103,10 +850,8 @@ class DriverRidePage(QWidget):
             self.show_error(f"Network error: {e}")
             return
 
-        if resp.get("type") != "RIDE.DRIVER_OPEN_REQS_RES":
-            self.show_error(resp.get("payload", {}).get(
-                "message", f"Unexpected response: {resp.get('type')}"
-            ))
+        if resp.get("type") != "RIDE.LIST_RES":
+            self.show_error(resp.get("payload", {}).get("message", f"Unexpected response: {resp.get('type')}"))
             return
 
         items = resp.get("payload", {}).get("items", [])
@@ -1122,20 +867,13 @@ class DriverRidePage(QWidget):
             time_iso = item.get("time_iso", "—")
 
             c0 = QTableWidgetItem(req_id)
-            c0.setData(Qt.UserRole, req_id)  # store raw request_id
+            # store raw request_id in UserRole, to send later
+            c0.setData(Qt.UserRole, req_id)
 
             self.table.setItem(row, 0, c0)
             self.table.setItem(row, 1, QTableWidgetItem(area))
             self.table.setItem(row, 2, QTableWidgetItem(direction))
             self.table.setItem(row, 3, QTableWidgetItem(time_iso))
-
-        # re-select previously selected request if it still exists
-        if preserve_selection and selected_req_id:
-            for row in range(self.table.rowCount()):
-                item0 = self.table.item(row, 0)
-                if item0 and item0.data(Qt.UserRole) == selected_req_id:
-                    self.table.selectRow(row)
-                    break
 
         self.show_ok(f"Loaded {len(items)} compatible requests.")
 
@@ -1151,7 +889,7 @@ class DriverRidePage(QWidget):
             return
 
         req_id = item0.data(Qt.UserRole)
-        if not isinstance(req_id, str):
+        if req_id is None:
             self.show_error("Internal error: invalid request id.")
             return
 
@@ -1174,132 +912,26 @@ class DriverRidePage(QWidget):
             self.show_ok(f"Accepted {req_id}.")
             self.table.clearSelection()
             self.refresh()
-            self.refresh_matches()
         elif rtype == "ERROR":
-            self.show_error(payload.get("message", "Failed to accept request."))
+            code = payload.get("code")
+            msg = payload.get("message", "Failed to accept request.")
+
+            if code == "REQUEST_CLOSED":
+                msg = "This request is no longer available (cancelled, matched, or expired)"
+            
+            self.show_error(msg)
+            self.table.clearSelection()
+            self.refresh()
         else:
             self.show_error(f"Unexpected response: {rtype}")
+    
+    def handle_request_closed(self, payload):
+        QMessageBox.information(self, "Request Closed", "A ride request you accepted has been closed (cancelled by passenger or expired).")
+        self.refresh()
+    
+    def add_broadcast(self, payload):
+        self.refresh()
 
-    # ---------------- chat ----------------
-    def on_open_chat(self):
-        r = self.table_matches.currentRow()
-        if r < 0:
-            self.show_error("Select an accepted ride to chat.")
-            return
-
-        item0 = self.table_matches.item(r, 0)
-        if not item0:
-            self.show_error("Internal error: missing request_id.")
-            return
-
-        req_id = item0.data(Qt.UserRole) or item0.text()
-        if not isinstance(req_id, str) or not req_id.startswith("req_"):
-            self.show_error("Internal error: invalid request_id.")
-            return
-
-        dlg = ChatDialog(self.session, req_id, self)
-        dlg.exec_()
-
-
-class RidePage(QWidget):
-    def __init__(self, session: JsonlSession, parent=None):
-        super().__init__(parent)
-        self.session = session
-
-        self.tabs = QTabWidget()
-        self.passenger_page = RideRequestPage(session)
-        self.driver_page = DriverRidePage(session)
-
-        self.tabs.addTab(self.passenger_page, "Passenger")
-        self.tabs.addTab(self.driver_page, "Driver")
-        # driver tab disabled by default until we know driver mode
-        self.tabs.setTabEnabled(1, False)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.tabs)
-
-
-class ChatDialog(QDialog):
-    def __init__(self, session: JsonlSession, request_id: str, parent=None):
-        super().__init__(parent)
-        self.session = session
-        self.request_id = request_id
-        self.last_message_id = 0
-
-        self.setWindowTitle(f"Chat – {request_id}")
-        self.resize(400, 300)
-
-        self.view = QTextEdit()
-        self.view.setReadOnly(True)
-
-        self.input = QLineEdit()
-        self.btn_send = QPushButton("Send")
-        self.btn_send.clicked.connect(self.send_message)
-
-        row = QHBoxLayout()
-        row.addWidget(self.input, 1)
-        row.addWidget(self.btn_send)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.view, 1)
-        layout.addLayout(row)
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.poll_messages)
-        self.timer.start(1500)  # 1.5s
-
-        self.poll_messages()  # initial load
-
-    def append_message(self, sender: str, text: str):
-        self.view.append(f"<b>{sender}:</b> {text}")
-
-    def send_message(self):
-        text = self.input.text().strip()
-        if not text:
-            return
-        req = {
-            "type": "RIDE.CHAT_SEND_REQ",
-            "id": str(uuid.uuid4()),
-            "payload": {"request_id": self.request_id, "text": text},
-        }
-        try:
-            resp = self.session.request(req)
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Network error: {e}")
-            return
-
-        if resp.get("type") == "RIDE.CHAT_SEND_RES":
-            self.input.clear()
-            self.poll_messages()
-        else:
-            QMessageBox.warning(
-                self,
-                "Error",
-                resp.get("payload", {}).get("message", "Failed to send message"),
-            )
-
-    def poll_messages(self):
-        req = {
-            "type": "RIDE.CHAT_POLL_REQ",
-            "id": str(uuid.uuid4()),
-            "payload": {"request_id": self.request_id, "after_message_id": self.last_message_id},
-        }
-        try:
-            resp = self.session.request(req)
-        except Exception:
-            # don't spam errors while polling
-            return
-
-        if resp.get("type") != "RIDE.CHAT_POLL_RES":
-            return
-
-        msgs = resp.get("payload", {}).get("messages", [])
-        for m in msgs:
-            mid_int = m.get("message_id", 0)
-            sender = m.get("sender_user_id", "?")
-            text = m.get("text", "")
-            self.append_message(sender, text)
-            self.last_message_id = max(self.last_message_id, mid_int)
 
 # =============================================================================
 # Main window: wires everything together
@@ -1308,11 +940,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AUBus")
-        self.setObjectName("MainWindow")
         self.resize(1000, 650)
 
         # Persistent session (used by login + profile + schedule + ride)
         self.session = JsonlSession(HOST, PORT, SOCKET_TIMEOUT)
+        self.session.push_reveived.connect(self.on_push_received)
+
+        self.p2p_sock = None
+        self.p2p_thread = None
 
         self.root = QStackedWidget()
         self.setCentralWidget(self.root)
@@ -1334,23 +969,26 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(app_page)
 
         left = QWidget()
-        left.setObjectName("SideBar")
         left_l = QVBoxLayout(left)
         self.btn_profile = QPushButton("Profile")
         self.btn_sched   = QPushButton("Schedule")
         self.btn_ride    = QPushButton("Ride")
-        self.btn_chat    = QPushButton("Chat")
-        for b in (self.btn_profile, self.btn_sched, self.btn_ride, self.btn_chat):
+        self.btn_logout = QPushButton("Logout")
+        
+        for b in (self.btn_profile, self.btn_sched, self.btn_ride):
             b.setCheckable(True)
             b.setAutoExclusive(True)
             left_l.addWidget(b)
         left_l.addStretch(1)
 
+        left_l.addWidget(self.btn_logout)
+        self.btn_logout.clicked.connect(self.on_logout)
+
         self.stack = QStackedWidget()
         # placeholders; will be replaced after login
         self.profile_page = title_page("Profile (login required)")
         self.schedule_page = title_page("Your Schedule")
-        self.ride_page = RidePage(self.session)
+        
 
         # index 0 → Profile (placeholder until login)
         self.profile_page = title_page("Profile (login required)")
@@ -1367,19 +1005,12 @@ class MainWindow(QMainWindow):
         self.btn_profile.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         self.btn_sched.clicked.connect(lambda: self.stack.setCurrentIndex(1))
         self.btn_ride.clicked.connect(lambda: self.stack.setCurrentIndex(2))
-        self.btn_chat.clicked.connect(self.on_chat_clicked)
-
 
         self.btn_profile.setChecked(True)
         self.stack.setCurrentIndex(0)
 
-        center = QWidget()
-        center_layout = QVBoxLayout(center)
-        center_layout.setContentsMargins(16, 16, 16, 16)
-        center_layout.addWidget(self.stack)
-
         h.addWidget(left)
-        h.addWidget(center, 1)
+        h.addWidget(self.stack, 1)
 
         # connect login signal
         self.login_tab.logged_in.connect(self.after_login)
@@ -1391,22 +1022,6 @@ class MainWindow(QMainWindow):
         self.btn_sched.setEnabled(bool(on))
         if hasattr(self, "schedule_page"):
             self.schedule_page.setEnabled(bool(on))
-    
-    def on_chat_clicked(self):
-        # Show the Ride page (index 2 in the stack)
-        self.stack.setCurrentIndex(2)
-
-        # Mark Chat as selected in the sidebar
-        self.btn_chat.setChecked(True)
-
-        # Focus the driver side and its accepted-rides table as “chat options”
-        if hasattr(self, "ride_page") and hasattr(self.ride_page, "driver_page"):
-            # switch to driver tab if your RidePage uses tabs
-            if hasattr(self.ride_page, "tabs"):
-                self.ride_page.tabs.setCurrentWidget(self.ride_page.driver_page)
-            # put keyboard focus on the accepted rides list
-            self.ride_page.driver_page.table_matches.setFocus()
-
 
     def after_login(self, user_preview: dict):
         # Profile screen
@@ -1439,31 +1054,183 @@ class MainWindow(QMainWindow):
         # enable/disable Schedule tab
         self.set_schedule_enabled(is_driver)
 
-        # remove old ride page (whatever it was)
+        # P2P listener follows driver mode
+        if is_driver:
+            self.start_p2p_listener()
+        else:
+            self.stop_p2p_listener()
+
+        # swap ride page (index 2) between driver/passenger views
         if hasattr(self, "ride_page"):
             self.stack.removeWidget(self.ride_page)
             self.ride_page.deleteLater()
 
-        # create the correct ride page for current mode
         if is_driver:
             self.ride_page = DriverRidePage(self.session)
         else:
             self.ride_page = RideRequestPage(self.session)
 
-        # insert it at index 2 (Ride tab)
         self.stack.insertWidget(2, self.ride_page)
+
+    def closeEvent(self, event):
+        """on window close, logout cleanly and close the session"""
+        try:
+            if self.session is not None:
+                req = {
+                    "type": "AUTH.LOGOUT_REQ",
+                    "id": str(uuid.uuid4()),
+                    "payload": {}
+                }
+                try:
+                    # best-effort logout; ignore errors
+                    self.session.request(req)
+                except Exception:
+                    pass
+
+                try:
+                    self.stop_p2p_listener() 
+                    self.session.close()
+                except Exception:
+                    pass
+        finally:
+            super().closeEvent(event)
+            
+    def on_logout(self):
+        try:
+            req = {"type": "AUTH.LOGOUT_REQ",
+               "id": str(uuid.uuid4()),
+               "payload": {}}
+            self.session.request(req)
+        except Exception:
+            # If network fails, still locally reset
+            pass
+
+        self.stop_p2p_listener() #stop p2p
+
+        if isinstance(self.ride_page, DriverRidePage):
+            self.ride_page.timer.stop()  # stop auto-refresh timer
+
+        self.set_schedule_enabled(False)
+        self.root.setCurrentIndex(0)
+        self.btn_profile.setChecked(False)
+        self.btn_sched.setChecked(False)
+        self.btn_ride.setChecked(False)
+
+    def start_p2p_listener(self):
+        """Start a simple TCP listener for driver P2P and announce it via PEER.OPEN_REQ."""
+        # If already running, do nothing
+        if self.p2p_sock is not None:
+            return
+
+        try:
+            # 1) create listening socket on an ephemeral port
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("0.0.0.0", 0))   # OS chooses port
+            s.listen(1)
+            port = s.getsockname()[1]
+            self.p2p_sock = s
+
+            # 2) tell server where we are listening
+            req = {
+                "type": "PEER.OPEN_REQ",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "p2p_port": port
+                    # we could also send external_ip/external_port if we knew them
+                }
+            }
+            try:
+                resp = self.session.request(req)
+            except Exception as e:
+                # if this fails, just log and shut listener down
+                print(f"PEER.OPEN_REQ failed: {e}")
+                s.close()
+                self.p2p_sock = None
+                return
+
+            if resp.get("type") != "PEER.OPEN_RES":
+                # server rejected; clean up
+                print(f"PEER.OPEN_RES error: {resp}")
+                s.close()
+                self.p2p_sock = None
+                return
+
+            # 3) spin a background thread just to accept connections
+            def _p2p_loop(listener: socket.socket):
+                try:
+                    while True:
+                        conn, addr = listener.accept()
+                        # minimal behavior: immediately close, or print
+                        print(f"P2P connection from {addr}, closing.")
+                        conn.close()
+                except Exception:
+                    # any error → exit thread
+                    pass
+
+            t = threading.Thread(target=_p2p_loop, args=(s,), daemon=True)
+            t.start()
+            self.p2p_thread = t
+
+            print(f"P2P listener started on port {port}")
+
+        except Exception as e:
+            print(f"start_p2p_listener failed: {e}")
+            if self.p2p_sock:
+                self.p2p_sock.close()
+            self.p2p_sock = None
+            self.p2p_thread = None
+
+
+    def stop_p2p_listener(self):
+        """Stop driver P2P listener if running."""
+        if self.p2p_sock is not None:
+            try:
+                self.p2p_sock.close()
+            except Exception:
+                pass
+        self.p2p_sock = None
+        self.p2p_thread = None
+    
+    def on_push_received(self, msg: dict):
+        t = msg.get("type")
+
+        if t == "RIDE.MATCHED":
+            self.on_ride_matched(msg)
+        
+        elif t == "REQUEST_CLOSED":
+            self.on_request_closed(msg)
+        
+        elif t == "DRIVER.BROADCAST":
+            self.on_driver_broadcast(msg)
+    
+    def on_ride_matched(self, msg: dict):
+        payload = msg.get("payload", {})
+        if isinstance(self.ride_page, RideRequestPage):
+            self.ride_page.handle_matched(payload)
+    
+    def on_request_closed(self, msg: dict):
+        payload = msg.get("payload", {})
+        if isinstance(self.ride_page, DriverRidePage):
+            self.ride_page.handle_request_closed(payload)
+    
+    def on_driver_broadcast(self, msg: dict):
+        if isinstance(self.ride_page, DriverRidePage):
+            self.ride_page.add_broadcast(msg.get("payload", {}))
+    
+
+
+
+
+
+
 
 
 def main():
     app = QApplication(sys.argv)
-
-    # APPLY THE THEME HERE
-    apply_bento_theme(app)
-
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
-
 
 if __name__ == "__main__":
     main()
