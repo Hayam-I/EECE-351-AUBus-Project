@@ -1010,10 +1010,7 @@ class RideRequestPage(QWidget):
     def handle_matched(self, payload):
         self.lbl_status.setText("Status: A driver has accepted your request!")
         self.btn_cancel.setEnabled(False)
-        try:
-            self.poll_timer.stop()
-        except AttributeError:
-            pass
+        
 
     def set_idle_state(self):
         """Reset the page to 'no active ride request' state."""
