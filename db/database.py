@@ -48,6 +48,8 @@ cursor.execute(
                 depart_time   TEXT    NOT NULL, -- 'HH:MM' 24h, validate in code
                 direction     TEXT    NOT NULL CHECK(direction IN ('to_AUB','from_AUB')),
                 area          TEXT    NOT NULL,
+                lat           REAL,
+                lon           REAL,
                 created_at    TEXT    DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
                 )
@@ -62,12 +64,15 @@ cursor.execute(
                    area TEXT NOT NULL,
                    direction TEXT NOT NULL,
                    departure_time TEXT NOT NULL,
+                   lat REAL,
+                   lon REAL,
                    status TEXT NOT NULL,
                    created_at TEXT NOT NULL,
                    FOREIGN KEY(user_id) REFERENCES users(user_id)
                )
                """
 )
+
 # accept/decline
 cursor.execute(
     """

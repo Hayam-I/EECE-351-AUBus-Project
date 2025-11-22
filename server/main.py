@@ -69,6 +69,23 @@ DRIVER_PEERS: dict[int, tuple[str,int]] = {}
 STATE_LOCK = threading.Lock()
 
 
+
+from math import radians, sin, cos, asin, sqrt
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    # convert degrees to radians
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+    c = 2 * asin(sqrt(a))
+    R = 6371.0  # Earth radius in km
+    return R * c
+
+
+
 # ---------------------------
 # UUIDv4 validation/helpers
 # ---------------------------
@@ -400,38 +417,65 @@ def profile_get(current_user_id: int, payload: dict, mid):
 # ---------------------------------------------------------
 def schedule_set(conn_state, payload, mid):
     uid, err = require_logged_in(conn_state, mid)
-    if err: return err
+    if err:
+        return err
     _ok, derr = require_driver(conn_state, mid)
-    if derr: return derr
+    if derr:
+        return derr
 
     ok, msg = validate_schedule_payload(payload or {})
     if not ok:
         return {"type": "ERROR", "id": mid, "payload": {"code": "BAD_REQUEST", "message": msg}}
 
-    p = payload
+    p = payload or {}
+
+    # NEW: require lat/lon for radius-based matching
+    lat = p.get("lat")
+    lon = p.get("lon")
+    if lat is None or lon is None:
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {
+                "code": "MISSING_COORDS",
+                "message": "Schedule slot must include lat and lon (pick it on the map).",
+            },
+        }
+
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
 
-        cur.execute("BEGIN IMMEDIATE") #to lock write into db when checking for duplicates/adding new
-        cur.execute("""
-        SELECT 1 FROM schedules WHERE user_id=? AND weekday=? AND depart_time=? AND direction=? AND area=?
-                    LIMIT 1 
-                    """, (uid, p["weekday"], p["depart_time"], p["direction"], p["area"]))
+        # Lock while checking duplicates + inserting
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute(
+            """
+            SELECT 1
+            FROM schedules
+            WHERE user_id=? AND weekday=? AND depart_time=? AND direction=? AND area=?
+            LIMIT 1
+            """,
+            (uid, p["weekday"], p["depart_time"], p["direction"], p["area"]),
+        )
         if cur.fetchone():
             conn.rollback()
             conn.close()
-            return{
-                "type":"ERROR",
-                "id":mid,
+            return {
+                "type": "ERROR",
+                "id": mid,
                 "payload": {
                     "code": "SCHEDULE_DUPLICATE",
-                    "message":"This exact schedule already exists"
-                }
+                    "message": "This exact schedule already exists",
+                },
             }
+
+        # INSERT now includes lat, lon
         cur.execute(
-            "INSERT INTO schedules (user_id, weekday, depart_time, direction, area) VALUES (?, ?, ?, ?, ?)",
-            (uid, p["weekday"], p["depart_time"], p["direction"], p["area"])
+            """
+            INSERT INTO schedules (user_id, weekday, depart_time, direction, area, lat, lon)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (uid, p["weekday"], p["depart_time"], p["direction"], p["area"], lat, lon),
         )
         schedule_id = cur.lastrowid
         conn.commit()
@@ -439,7 +483,11 @@ def schedule_set(conn_state, payload, mid):
         return {"type": "SCHEDULE.SET_RES", "id": mid, "payload": {"schedule_id": schedule_id}}
     except Exception:
         logging.exception("schedule_set failed")
-        return {"type": "ERROR", "id": mid, "payload": {"code": "SERVER_ERROR", "message": "Failed to set schedule"}}
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "SERVER_ERROR", "message": "Failed to set schedule"},
+        }
 
 
 def schedule_get(conn_state, payload, mid):
@@ -1024,34 +1072,66 @@ def handle_message(msg: dict, conn_state: dict):
         uid, err = require_logged_in(conn_state, mid)
         if err:
             return err
+
         p = payload or {}
         area = p.get("area")
         direction = p.get("direction")
         time_iso = p.get("time_iso")
+        lat = p.get("lat")
+        lon = p.get("lon")
 
         if not isinstance(area, str) or not area.strip():
-            return {"type":"ERROR", "id":mid, "payload":{
-                "code":"BAD_REQUEST",
-                "message":"area required"
-            }}
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "BAD_REQUEST",
+                    "message": "area required",
+                },
+            }
         if direction not in ("to_AUB", "from_AUB"):
-           return {"type":"ERROR", "id":mid, "payload":{
-                "code":"BAD_REQUEST",
-                "message":"direction must be 'to_AUB' and 'from_AUB'"
-            }}
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "BAD_REQUEST",
+                    "message": "direction must be 'to_AUB' and 'from_AUB'",
+                },
+            }
         if not isinstance(time_iso, str) or not time_iso.strip():
-            return {"type":"ERROR", "id":mid, "payload":{
-                "code":"BAD_REQUEST",
-                "message":"time_iso required"
-            }}
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "BAD_REQUEST",
+                    "message": "time_iso required",
+                },
+            }
+
+        # NEW: require map coordinates from passenger
+        if lat is None or lon is None:
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "MISSING_COORDS",
+                    "message": "Ride request must include lat and lon (pick it on the map).",
+                },
+            }
+
         try:
             weekday_sun0, req_minutes = _minutes_from_iso(time_iso)
         except Exception:
-            return {"type":"ERROR", "id":mid, "payload":{
-                "code":"BAD_REQUEST",
-                "message":"time_iso must be valid ISO"
-            }}
-                # NEW: enforce at most one active request per passenger
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "BAD_REQUEST",
+                    "message": "time_iso must be valid ISO",
+                },
+            }
+
+        # Enforce at most one active request per passenger
         if _passenger_has_active_request(uid):
             return {
                 "type": "ERROR",
@@ -1065,35 +1145,62 @@ def handle_message(msg: dict, conn_state: dict):
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
-             # 1) create request row
-            cur.execute("""
-                INSERT INTO ride_req (user_id, area, direction, departure_time, status, created_at)
-                VALUES (?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
-            """, (uid, area, direction, time_iso))
+
+            # 1) create request row, now storing lat/lon
+            cur.execute(
+                """
+                INSERT INTO ride_req (user_id, area, direction, departure_time, lat, lon, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
+                """,
+                (uid, area, direction, time_iso, lat, lon),
+            )
             req_id_int = cur.lastrowid
             request_id = f"req_{req_id_int}"
 
-            # 2) find candidate driver schedules (same weekday/area/direction; ignore min_rating on purpose)
-            cur.execute("""
-                SELECT s.user_id, s.depart_time
+            # 2) find candidate driver schedules — same weekday & direction,
+            #    but we will filter by distance and time window in Python.
+            cur.execute(
+                """
+                SELECT s.user_id, s.depart_time, s.lat, s.lon
                 FROM schedules s
                 JOIN users u ON u.user_id = s.user_id
-                WHERE s.weekday=? AND s.area=? AND s.direction=? AND u.is_driver=1
-            """, (weekday_sun0, area, direction))
+                WHERE s.weekday = ? AND s.direction = ? AND u.is_driver = 1
+                """,
+                (weekday_sun0, direction),
+            )
             rows = cur.fetchall()
             conn.commit()
             conn.close()
 
-            # filter by ±30 minutes
-            CUTOFF = 30
+            CUTOFF_MINUTES = 30
+            MAX_DIST_KM = 1.0
+
             candidate_ids = []
-            for driver_id, depart_hhmm in rows:
+            for driver_id, depart_hhmm, s_lat, s_lon in rows:
+                # skip if no coords on schedule
+                if s_lat is None or s_lon is None:
+                    continue
+                # skip self
+                if int(driver_id) == uid:
+                    continue
+
                 try:
-                    if abs(_minutes_from_hhmm(depart_hhmm) - req_minutes) <= CUTOFF:
-                        candidate_ids.append(int(driver_id))
+                    sched_minutes = _minutes_from_hhmm(depart_hhmm)
                 except Exception:
-                    pass
-            candidate_ids = [d for d in candidate_ids if d != uid] 
+                    continue
+
+                # time window first
+                if abs(sched_minutes - req_minutes) > CUTOFF_MINUTES:
+                    continue
+
+                # distance filter
+                try:
+                    dist = haversine_km(float(lat), float(lon), float(s_lat), float(s_lon))
+                except Exception:
+                    continue
+
+                if dist <= MAX_DIST_KM:
+                    candidate_ids.append(int(driver_id))
 
             passenger_preview = {
                 "user_id": f"user_{uid}",
@@ -1110,20 +1217,27 @@ def handle_message(msg: dict, conn_state: dict):
                     "sock": conn_state.get("sock"),
                 }
 
-
             sent = _broadcast_driver_candidates(request_id, passenger_preview, candidate_ids)
 
-            return {"type": "RIDE.REQUEST_RES", "id": mid, "payload": {
-                "request_id": request_id,
-                "candidates_found": len(candidate_ids),
-                "broadcasted_to_online": sent
-            }}
+            return {
+                "type": "RIDE.REQUEST_RES",
+                "id": mid,
+                "payload": {
+                    "request_id": request_id,
+                    "candidates_found": len(candidate_ids),
+                    "broadcasted_to_online": sent,
+                },
+            }
 
         except Exception:
             logging.exception("RIDE.REQUEST_REQ failed")
-            return {"type": "ERROR", "id": mid, "payload": {"code": "SERVER_ERROR", "message": "Failed to create request"}}
-        
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {"code": "SERVER_ERROR", "message": "Failed to create request"},
+            }
     # list open, compatible ride requests for this driver
+        # list open, compatible ride requests for this driver (within 1 km)
     if mtype == "RIDE.LIST_REQ":
         driver_id, err = require_logged_in(conn_state, mid)
         if err:
@@ -1137,10 +1251,13 @@ def handle_message(msg: dict, conn_state: dict):
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
 
-            # 1) get this driver's schedules
+            # 1) get this driver's schedules, including lat/lon
             cur.execute(
-                "SELECT weekday, depart_time, area, direction "
-                "FROM schedules WHERE user_id=?",
+                """
+                SELECT weekday, depart_time, area, direction, lat, lon
+                FROM schedules
+                WHERE user_id = ?
+                """,
                 (driver_id,),
             )
             driver_scheds = cur.fetchall()
@@ -1153,44 +1270,71 @@ def handle_message(msg: dict, conn_state: dict):
                     "payload": {"items": []},
                 }
 
-            # 2) get all open ride requests
+            # 2) get all open ride requests with lat/lon
             cur.execute(
-                "SELECT request_id, user_id, area, direction, departure_time "
-                "FROM ride_req WHERE status='open'"
+                """
+                SELECT request_id, user_id, area, direction, departure_time, lat, lon
+                FROM ride_req
+                WHERE status = 'open'
+                """
             )
             req_rows = cur.fetchall()
             conn.close()
 
-            CUTOFF = 30  # minutes window
+            CUTOFF_MINUTES = 30
+            MAX_DIST_KM = 1.0
             items = []
 
-            for req_id_int, passenger_id, area, direction, dep_time in req_rows:
+            for req_id_int, passenger_id, area, direction, dep_time, r_lat, r_lon in req_rows:
+                # require passenger coordinates
+                if r_lat is None or r_lon is None:
+                    continue
+
                 try:
                     weekday_sun0, req_minutes = _minutes_from_iso(dep_time)
                 except Exception:
                     continue
 
                 compatible = False
-                for wd, depart_hhmm, s_area, s_dir in driver_scheds:
-                    if s_area != area or s_dir != direction:
+
+                for wd, depart_hhmm, s_area, s_dir, s_lat, s_lon in driver_scheds:
+                    # direction must match
+                    if s_dir != direction:
                         continue
+                    # weekday must match
                     if wd != weekday_sun0:
                         continue
+                    # schedule must have coords
+                    if s_lat is None or s_lon is None:
+                        continue
+
                     try:
                         sched_minutes = _minutes_from_hhmm(depart_hhmm)
                     except Exception:
                         continue
-                    if abs(sched_minutes - req_minutes) <= CUTOFF:
+
+                    # time window
+                    if abs(sched_minutes - req_minutes) > CUTOFF_MINUTES:
+                        continue
+
+                    # distance
+                    try:
+                        dist = haversine_km(float(r_lat), float(r_lon), float(s_lat), float(s_lon))
+                    except Exception:
+                        continue
+
+                    if dist <= MAX_DIST_KM:
                         compatible = True
                         break
 
                 if not compatible:
                     continue
 
+                # don't show your own requests
                 if passenger_id == driver_id:
-                    continue 
+                    continue
 
-                request_key = f"req_{req_id_int}"   
+                request_key = f"req_{req_id_int}"
 
                 items.append(
                     {
