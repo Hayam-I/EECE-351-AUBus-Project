@@ -41,37 +41,38 @@ cursor.execute(
 
 cursor.execute(
     """
-               CREATE TABLE IF NOT EXISTS schedules (
-                schedule_id   INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id       INTEGER NOT NULL,
-                weekday       INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
-                depart_time   TEXT    NOT NULL, -- 'HH:MM' 24h, validate in code
-                direction     TEXT    NOT NULL CHECK(direction IN ('to_AUB','from_AUB')),
-                area          TEXT    NOT NULL,
-                lat           REAL,
-                lon           REAL,
-                created_at    TEXT    DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
-                )
-               """
+    CREATE TABLE IF NOT EXISTS schedules (
+        schedule_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id       INTEGER NOT NULL,
+        weekday       INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+        depart_time   TEXT    NOT NULL, -- 'HH:MM' 24h
+        direction     TEXT    NOT NULL CHECK(direction IN ('to_AUB','from_AUB')),
+        area          TEXT    NOT NULL,
+        lat           REAL,   -- driver's pin latitude (optional but used for matching)
+        lon           REAL,   -- driver's pin longitude
+        created_at    TEXT    DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    )
+    """
 )
 
 cursor.execute(
     """
-               CREATE TABLE ride_req(
-                   request_id INTEGER PRIMARY KEY,
-                   user_id INTEGER NOT NULL,
-                   area TEXT NOT NULL,
-                   direction TEXT NOT NULL,
-                   departure_time TEXT NOT NULL,
-                   lat REAL,
-                   lon REAL,
-                   status TEXT NOT NULL,
-                   created_at TEXT NOT NULL,
-                   FOREIGN KEY(user_id) REFERENCES users(user_id)
-               )
-               """
+    CREATE TABLE ride_req(
+        request_id     INTEGER PRIMARY KEY,
+        user_id        INTEGER NOT NULL,
+        area           TEXT NOT NULL,   -- still required for display
+        direction      TEXT NOT NULL,
+        departure_time TEXT NOT NULL,
+        lat            REAL,            -- passenger pin latitude
+        lon            REAL,            -- passenger pin longitude
+        status         TEXT NOT NULL,
+        created_at     TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(user_id)
+    )
+    """
 )
+
 
 # accept/decline
 cursor.execute(

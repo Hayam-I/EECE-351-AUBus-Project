@@ -428,30 +428,28 @@ def schedule_set(conn_state, payload, mid):
         return {"type": "ERROR", "id": mid, "payload": {"code": "BAD_REQUEST", "message": msg}}
 
     p = payload or {}
-
-    # NEW: require lat/lon for radius-based matching
     lat = p.get("lat")
     lon = p.get("lon")
-    if lat is None or lon is None:
+
+    # Require coords for matching
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except (TypeError, ValueError):
         return {
             "type": "ERROR",
             "id": mid,
-            "payload": {
-                "code": "MISSING_COORDS",
-                "message": "Schedule slot must include lat and lon (pick it on the map).",
-            },
+            "payload": {"code": "BAD_REQUEST", "message": "lat and lon must be numeric"},
         }
 
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
 
-        # Lock while checking duplicates + inserting
         cur.execute("BEGIN IMMEDIATE")
         cur.execute(
             """
-            SELECT 1
-            FROM schedules
+            SELECT 1 FROM schedules
             WHERE user_id=? AND weekday=? AND depart_time=? AND direction=? AND area=?
             LIMIT 1
             """,
@@ -469,7 +467,6 @@ def schedule_set(conn_state, payload, mid):
                 },
             }
 
-        # INSERT now includes lat, lon
         cur.execute(
             """
             INSERT INTO schedules (user_id, weekday, depart_time, direction, area, lat, lon)
@@ -1074,7 +1071,7 @@ def handle_message(msg: dict, conn_state: dict):
             return err
 
         p = payload or {}
-        area = p.get("area")
+        area = p.get("area")           # still required for display
         direction = p.get("direction")
         time_iso = p.get("time_iso")
         lat = p.get("lat")
@@ -1084,10 +1081,7 @@ def handle_message(msg: dict, conn_state: dict):
             return {
                 "type": "ERROR",
                 "id": mid,
-                "payload": {
-                    "code": "BAD_REQUEST",
-                    "message": "area required",
-                },
+                "payload": {"code": "BAD_REQUEST", "message": "area required"},
             }
         if direction not in ("to_AUB", "from_AUB"):
             return {
@@ -1095,28 +1089,14 @@ def handle_message(msg: dict, conn_state: dict):
                 "id": mid,
                 "payload": {
                     "code": "BAD_REQUEST",
-                    "message": "direction must be 'to_AUB' and 'from_AUB'",
+                    "message": "direction must be 'to_AUB' or 'from_AUB'",
                 },
             }
         if not isinstance(time_iso, str) or not time_iso.strip():
             return {
                 "type": "ERROR",
                 "id": mid,
-                "payload": {
-                    "code": "BAD_REQUEST",
-                    "message": "time_iso required",
-                },
-            }
-
-        # NEW: require map coordinates from passenger
-        if lat is None or lon is None:
-            return {
-                "type": "ERROR",
-                "id": mid,
-                "payload": {
-                    "code": "MISSING_COORDS",
-                    "message": "Ride request must include lat and lon (pick it on the map).",
-                },
+                "payload": {"code": "BAD_REQUEST", "message": "time_iso required"},
             }
 
         try:
@@ -1129,6 +1109,17 @@ def handle_message(msg: dict, conn_state: dict):
                     "code": "BAD_REQUEST",
                     "message": "time_iso must be valid ISO",
                 },
+            }
+
+        # New: require numeric lat/lon for the pin
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except (TypeError, ValueError):
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {"code": "BAD_REQUEST", "message": "lat and lon must be numeric"},
             }
 
         # Enforce at most one active request per passenger
@@ -1145,8 +1136,7 @@ def handle_message(msg: dict, conn_state: dict):
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
-
-            # 1) create request row, now storing lat/lon
+            # 1) create request row with lat/lon
             cur.execute(
                 """
                 INSERT INTO ride_req (user_id, area, direction, departure_time, lat, lon, status, created_at)
@@ -1157,14 +1147,15 @@ def handle_message(msg: dict, conn_state: dict):
             req_id_int = cur.lastrowid
             request_id = f"req_{req_id_int}"
 
-            # 2) find candidate driver schedules — same weekday & direction,
-            #    but we will filter by distance and time window in Python.
+            # 2) find candidate driver schedules:
+            #    same weekday, same direction, compatible time window.
+            #    area is *ignored* for matching now.
             cur.execute(
                 """
                 SELECT s.user_id, s.depart_time, s.lat, s.lon
                 FROM schedules s
                 JOIN users u ON u.user_id = s.user_id
-                WHERE s.weekday = ? AND s.direction = ? AND u.is_driver = 1
+                WHERE s.weekday=? AND s.direction=? AND u.is_driver=1
                 """,
                 (weekday_sun0, direction),
             )
@@ -1172,16 +1163,16 @@ def handle_message(msg: dict, conn_state: dict):
             conn.commit()
             conn.close()
 
-            CUTOFF_MINUTES = 30
-            MAX_DIST_KM = 1.0
+            CUTOFF_MIN = 30
+            RADIUS_KM = 1.0
 
             candidate_ids = []
-            for driver_id, depart_hhmm, s_lat, s_lon in rows:
-                # skip if no coords on schedule
-                if s_lat is None or s_lon is None:
-                    continue
-                # skip self
-                if int(driver_id) == uid:
+            for driver_id, depart_hhmm, dlat, dlon in rows:
+                # Require driver to have a pin as well
+                try:
+                    dlat = float(dlat)
+                    dlon = float(dlon)
+                except (TypeError, ValueError):
                     continue
 
                 try:
@@ -1189,18 +1180,19 @@ def handle_message(msg: dict, conn_state: dict):
                 except Exception:
                     continue
 
-                # time window first
-                if abs(sched_minutes - req_minutes) > CUTOFF_MINUTES:
+                # Time window check
+                if abs(sched_minutes - req_minutes) > CUTOFF_MIN:
                     continue
 
-                # distance filter
-                try:
-                    dist = haversine_km(float(lat), float(lon), float(s_lat), float(s_lon))
-                except Exception:
+                # Distance check using haversine
+                dist_km = haversine_km(lat, lon, dlat, dlon)
+                if dist_km > RADIUS_KM:
                     continue
 
-                if dist <= MAX_DIST_KM:
-                    candidate_ids.append(int(driver_id))
+                if int(driver_id) == uid:
+                    continue  # don't match with yourself
+
+                candidate_ids.append(int(driver_id))
 
             passenger_preview = {
                 "user_id": f"user_{uid}",
@@ -1208,6 +1200,8 @@ def handle_message(msg: dict, conn_state: dict):
                 "direction": direction,
                 "time_iso": time_iso,
                 "request_id": request_id,
+                "lat": lat,
+                "lon": lon,
             }
 
             # remember passenger socket so we can notify upon match
@@ -1236,8 +1230,7 @@ def handle_message(msg: dict, conn_state: dict):
                 "id": mid,
                 "payload": {"code": "SERVER_ERROR", "message": "Failed to create request"},
             }
-    # list open, compatible ride requests for this driver
-        # list open, compatible ride requests for this driver (within 1 km)
+
     if mtype == "RIDE.LIST_REQ":
         driver_id, err = require_logged_in(conn_state, mid)
         if err:
@@ -1251,12 +1244,12 @@ def handle_message(msg: dict, conn_state: dict):
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
 
-            # 1) get this driver's schedules, including lat/lon
+            # Driver's schedules, including lat/lon
             cur.execute(
                 """
-                SELECT weekday, depart_time, area, direction, lat, lon
+                SELECT weekday, depart_time, direction, lat, lon
                 FROM schedules
-                WHERE user_id = ?
+                WHERE user_id=?
                 """,
                 (driver_id,),
             )
@@ -1270,24 +1263,28 @@ def handle_message(msg: dict, conn_state: dict):
                     "payload": {"items": []},
                 }
 
-            # 2) get all open ride requests with lat/lon
+            # All open ride requests WITH lat/lon
             cur.execute(
                 """
                 SELECT request_id, user_id, area, direction, departure_time, lat, lon
                 FROM ride_req
-                WHERE status = 'open'
+                WHERE status='open'
                 """
             )
             req_rows = cur.fetchall()
             conn.close()
 
-            CUTOFF_MINUTES = 30
-            MAX_DIST_KM = 1.0
+            CUTOFF_MIN = 30
+            RADIUS_KM = 1.0
+
             items = []
 
-            for req_id_int, passenger_id, area, direction, dep_time, r_lat, r_lon in req_rows:
-                # require passenger coordinates
-                if r_lat is None or r_lon is None:
+            for req_id_int, passenger_id, area, direction, dep_time, plat, plon in req_rows:
+                # Skip requests without coords
+                try:
+                    plat = float(plat)
+                    plon = float(plon)
+                except (TypeError, ValueError):
                     continue
 
                 try:
@@ -1296,16 +1293,16 @@ def handle_message(msg: dict, conn_state: dict):
                     continue
 
                 compatible = False
-
-                for wd, depart_hhmm, s_area, s_dir, s_lat, s_lon in driver_scheds:
-                    # direction must match
+                for wd, depart_hhmm, s_dir, dlat, dlon in driver_scheds:
                     if s_dir != direction:
                         continue
-                    # weekday must match
                     if wd != weekday_sun0:
                         continue
-                    # schedule must have coords
-                    if s_lat is None or s_lon is None:
+
+                    try:
+                        dlat = float(dlat)
+                        dlon = float(dlon)
+                    except (TypeError, ValueError):
                         continue
 
                     try:
@@ -1313,24 +1310,17 @@ def handle_message(msg: dict, conn_state: dict):
                     except Exception:
                         continue
 
-                    # time window
-                    if abs(sched_minutes - req_minutes) > CUTOFF_MINUTES:
+                    if abs(sched_minutes - req_minutes) > CUTOFF_MIN:
                         continue
 
-                    # distance
-                    try:
-                        dist = haversine_km(float(r_lat), float(r_lon), float(s_lat), float(s_lon))
-                    except Exception:
-                        continue
-
-                    if dist <= MAX_DIST_KM:
+                    dist_km = haversine_km(plat, plon, dlat, dlon)
+                    if dist_km <= RADIUS_KM:
                         compatible = True
                         break
 
                 if not compatible:
                     continue
 
-                # don't show your own requests
                 if passenger_id == driver_id:
                     continue
 
@@ -1340,7 +1330,7 @@ def handle_message(msg: dict, conn_state: dict):
                     {
                         "request_id": request_key,
                         "user_id": f"user_{passenger_id}",
-                        "area": area,
+                        "area": area,  # for display only
                         "direction": direction,
                         "time_iso": dep_time,
                     }

@@ -726,9 +726,6 @@ class ScheduleScreen(QWidget):
         self.selected_lat = None
         self.selected_lon = None
 
-        self.btn_pick_location = QPushButton("Pick location on map")
-        self.btn_pick_location.clicked.connect(self.open_map)
-
         form = QHBoxLayout()
 
         self.cb_weekday = QComboBox()
@@ -740,13 +737,23 @@ class ScheduleScreen(QWidget):
 
         self.cb_direction = QComboBox()
         self.cb_direction.addItems(["to_AUB", "from_AUB"])
+        self.cb_direction.currentTextChanged.connect(self._update_direction_hints)
+
 
         self.in_area = QLineEdit()
         self.in_area.setPlaceholderText("e.g Hamra")
+
+        self.btn_pick_location = QPushButton("Pick location on map")
+        self.btn_pick_location.clicked.connect(self.open_map)
+
         self.btn_add = QPushButton("Add")
         self.btn_add.clicked.connect(self.on_add_slot)
 
-        for w in (self.cb_weekday, self.time_edit, self.cb_direction, self.in_area, self.btn_pick_location, self.btn_add):
+        self._update_direction_hints()
+
+
+        for w in (self.cb_weekday, self.time_edit, self.cb_direction, self.in_area,
+                  self.btn_pick_location, self.btn_add):
             form.addWidget(w)
 
         self.err = QLabel("")
@@ -759,7 +766,7 @@ class ScheduleScreen(QWidget):
         self.ok.setStyleSheet("color: green;")
         self.ok.setVisible(False)
 
-        self.table = QTableWidget(0,4)
+        self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Weekday", "Time", "Direction", "Area"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -784,6 +791,29 @@ class ScheduleScreen(QWidget):
 
         self.refresh()
 
+    # ---- map picking ----
+    def open_map(self):
+        dlg = MapSelector(self)
+
+        # (optional) tweak text based on direction
+        direction = self.cb_direction.currentText()
+        if direction == "to_AUB":
+            dlg.setWindowTitle("Select your pickup location")
+            dlg.label.setText("Try to approximately locate where you will be picked up (your current location).")
+        else:
+            dlg.setWindowTitle("Select your drop-off location")
+            dlg.label.setText("Try to approximately locate where you will be dropped off.")
+
+        dlg.location_selected.connect(self.on_location_picked)
+        dlg.showMaximized()   # important: so showEvent sees the max size
+        dlg.exec_()
+
+    def on_location_picked(self, lat, lon):
+        self.selected_lat = lat
+        self.selected_lon = lon
+        self.show_ok(f"Pickup location selected ✓ (lat={lat:.5f}, lon={lon:.5f})")
+
+    # ---- helpers ----
     def show_error(self, msg):
         self.err.setText(msg)
         self.err.setVisible(True)
@@ -799,9 +829,21 @@ class ScheduleScreen(QWidget):
 
     def _time_str(self):
         return self.time_edit.time().toString("HH:mm")
+    
+    def _update_direction_hints(self):
+        direction = self.cb_direction.currentText()
+        if direction == "to_AUB":
+            # Driver is going TO campus; pin = origin
+            self.in_area.setPlaceholderText("From where are you driving? (e.g. Hamra)")
+            self.btn_pick_location.setText("Pick starting point on map")
+        else:
+            # Driver is leaving AUB; pin = destination
+            self.in_area.setPlaceholderText("Where are you dropping off? (e.g. Hamra)")
+            self.btn_pick_location.setText("Pick drop-off area on map")
 
+
+    # ---- CRUD ----
     def refresh(self):
-        # remember currently selected schedule_id (if any)
         current_row = self.table.currentRow()
         selected_sched_id = None
         if current_row >= 0:
@@ -841,7 +883,6 @@ class ScheduleScreen(QWidget):
                 if 0 <= wd_idx <= 6 else str(wd_idx)
 
             c0 = QTableWidgetItem(wd)
-            # store schedule_id here
             c0.setData(Qt.UserRole, item["schedule_id"])
 
             self.table.setItem(row, 0, c0)
@@ -849,7 +890,6 @@ class ScheduleScreen(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem(item["direction"]))
             self.table.setItem(row, 3, QTableWidgetItem(item["area"]))
 
-        # try to reselect previous schedule if it still exists
         if selected_sched_id is not None:
             for row in range(self.table.rowCount()):
                 item0 = self.table.item(row, 0)
@@ -857,31 +897,14 @@ class ScheduleScreen(QWidget):
                     self.table.setCurrentCell(row, 0)
                     break
 
-        # up to you if you keep this; it will pop a dialog every refresh
-        # self.show_ok(f"Loaded {len(items)} slots.")
-
-
-    def open_map(self):
-        self.map_dialog = MapSelector(self)
-        self.map_dialog.location_selected.connect(self.on_location_picked)
-        self.map_dialog.setWindowTitle("Select schedule starting location")
-        self.map_dialog.setWindowModality(Qt.ApplicationModal)
-        self.map_dialog.showMaximized()
-
-    def on_location_picked(self, lat, lon):
-        self.selected_lat = lat
-        self.selected_lon = lon
-        self.show_ok(f"Location selected ✓ (lat={lat:.5f}, lon={lon:.5f})")
-
-
-
     def on_add_slot(self):
         area = self.in_area.text().strip()
         if not area:
-            self.show_error("Area is required")
+            self.show_error("Area is required (for display).")
             return
+
         if self.selected_lat is None or self.selected_lon is None:
-            self.show_error("Please pick a location on the map for this slot.")
+            self.show_error("Please pick a map location for this schedule.")
             return
 
         payload = {
@@ -889,10 +912,11 @@ class ScheduleScreen(QWidget):
             "depart_time": self._time_str(),
             "direction": self.cb_direction.currentText(),
             "area": area,
-            "lat": self.selected_lat,
-            "lon": self.selected_lon,
+            "lat": float(self.selected_lat),
+            "lon": float(self.selected_lon),
         }
-        req = {"type": "SCHEDULE.SET_REQ", "id":str(uuid.uuid4()), "payload": payload}
+
+        req = {"type": "SCHEDULE.SET_REQ", "id": str(uuid.uuid4()), "payload": payload}
         try:
             resp = self.session.request(req)
         except Exception as e:
@@ -915,11 +939,11 @@ class ScheduleScreen(QWidget):
             self.show_error("Select a row to delete.")
             return
 
-        sid = self.table.item(r,0).data(Qt.UserRole)
+        sid = self.table.item(r, 0).data(Qt.UserRole)
         if not isinstance(sid, int):
             self.show_error("Internal error: missing schedule_id.")
             return
-        req = {"type":"SCHEDULE.REMOVE_REQ", "id":str(uuid.uuid4()), "payload":{"schedule_id":sid}}
+        req = {"type": "SCHEDULE.REMOVE_REQ", "id": str(uuid.uuid4()), "payload": {"schedule_id": sid}}
         try:
             resp = self.session.request(req)
         except Exception as e:
@@ -930,7 +954,7 @@ class ScheduleScreen(QWidget):
             self.show_ok("Slot deleted.")
             self.refresh()
         else:
-            self.show_error(resp.get("payload", {}).get("message","Failed to delete slot."))
+            self.show_error(resp.get("payload", {}).get("message", "Failed to delete slot."))
 
 # =============================================================================
 # Passenger Ride Request Page
@@ -960,6 +984,8 @@ class RideRequestPage(QWidget):
 
         self.cb_direction = QComboBox()
         self.cb_direction.addItems(["to_AUB", "from_AUB"])
+        self.cb_direction.currentTextChanged.connect(self._update_direction_hints)
+
 
         self.dt = QDateTimeEdit(QDateTime.currentDateTime())
         self.dt.setDisplayFormat("yyyy-MM-dd HH:mm")
@@ -972,6 +998,8 @@ class RideRequestPage(QWidget):
         self.btn_cancel = QPushButton("Cancel request")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self.on_cancel_clicked)
+        self._update_direction_hints()
+
 
         # ---- Layout ----
         form = QFormLayout()
@@ -1039,11 +1067,21 @@ class RideRequestPage(QWidget):
     # MAP HANDLERS
     # =====================================================================
     def open_map(self):
-        self.map_dialog = MapSelector(self)
-        self.map_dialog.location_selected.connect(self.on_location_picked)
-        self.map_dialog.setWindowTitle("Select your location")
-        self.map_dialog.setWindowModality(Qt.ApplicationModal)  # behaves like a real popup
-        self.map_dialog.showMaximized()
+        dlg = MapSelector(self)
+
+        # (optional) tweak text based on direction
+        direction = self.cb_direction.currentText()
+        if direction == "to_AUB":
+            dlg.setWindowTitle("Select your pickup location")
+            dlg.label.setText("Try to approximately locate where you will be picked up (your current location).")
+        else:
+            dlg.setWindowTitle("Select your drop-off location")
+            dlg.label.setText("Try to approximately locate where you will be dropped off.")
+
+        dlg.location_selected.connect(self.on_location_picked)
+        dlg.showMaximized()   # important: so showEvent sees the max size
+        dlg.exec_()
+
 
     def on_location_picked(self, lat, lon):
         self.selected_lat = lat
@@ -1052,14 +1090,29 @@ class RideRequestPage(QWidget):
 
         if hasattr(self, "map_dialog"):
             self.map_dialog.close()
+        
+    def _update_direction_hints(self):
+        direction = self.cb_direction.currentText()
+        if direction == "to_AUB":
+            # Passenger is off-campus, going TO AUB
+            self.in_area.setPlaceholderText("Where are you now? (e.g. Hamra)")
+            self.btn_pick_location.setText("Pick your pickup location on map")
+        else:
+            # Passenger is at AUB, going somewhere else
+            self.in_area.setPlaceholderText("Where are you going? (e.g. Hamra)")
+            self.btn_pick_location.setText("Pick your drop-off location on map")
+
 
     # =====================================================================
     # SUBMIT REQUEST
     # =====================================================================
     def on_submit(self):
+        self.err.setVisible(False)
+        self.ok.setVisible(False)
+
         area = self.in_area.text().strip()
         if not area:
-            self.show_error("Area is required.")
+            self.show_error("Area is required (for info).")
             return
 
         if self.selected_lat is None or self.selected_lon is None:
@@ -1067,18 +1120,14 @@ class RideRequestPage(QWidget):
             return
 
         payload = {
-            "area": area,
+            "area": area,  # kept for display, NOT used for matching
             "direction": self.cb_direction.currentText(),
             "time_iso": self._iso_string(),
-            "lat": self.selected_lat,
-            "lon": self.selected_lon,
+            "lat": float(self.selected_lat),
+            "lon": float(self.selected_lon),
         }
 
-        req = {
-            "type": "RIDE.REQUEST_REQ",
-            "id": str(uuid.uuid4()),
-            "payload": payload,
-        }
+        req = {"type": "RIDE.REQUEST_REQ", "id": str(uuid.uuid4()), "payload": payload}
 
         try:
             resp = self.session.request(req)
@@ -1091,7 +1140,7 @@ class RideRequestPage(QWidget):
 
         if rtype == "RIDE.REQUEST_RES":
             req_id = p.get("request_id")
-            found = p.get("candidates_found", 0)
+            found  = p.get("candidates_found", 0)
 
             self.current_request_id = req_id
             self.btn_cancel.setEnabled(True)
@@ -1099,7 +1148,6 @@ class RideRequestPage(QWidget):
 
             self.lbl_request_id.setText(f"Request ID: {req_id}")
             self.lbl_status.setText(f"Status: open — compatible drivers found: {found}")
-
             self.show_ok("Ride request created.")
             self.poll_timer.start()
 
@@ -1110,7 +1158,6 @@ class RideRequestPage(QWidget):
                 self.current_request_id = None
                 self.btn_cancel.setEnabled(False)
             self.show_error(msg)
-
         else:
             self.show_error(f"Unexpected response: {rtype}")
 

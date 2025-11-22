@@ -1,217 +1,233 @@
 # client/map_selector.py
 
 import os
-from math import isfinite
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QPixmap, QPainter, QPen, QBrush
 from PyQt5.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QLabel,
+    QDialog,
     QGraphicsView,
     QGraphicsScene,
-    QPushButton,
+    QLabel,
+    QVBoxLayout,
     QHBoxLayout,
+    QPushButton,
+    QMessageBox,
 )
-from PyQt5.QtGui import QPixmap, QPainter, QPen, QBrush, QColor
 
 
-class MapView(QGraphicsView):
+class MapGraphicsView(QGraphicsView):
     """
-    QGraphicsView wrapper that supports:
-    - Scroll wheel zoom
-    - Click to select a point (emits scene x,y)
-    - Drag to pan
+    Custom graphics view that supports:
+      - Smooth rendering
+      - Scroll-hand panning
+      - Wheel zoom with min zoom limit (relative to fitted size)
+      - Emitting click coordinates in scene space
     """
-    clicked = pyqtSignal(float, float)  # scene x, scene y
+    clicked_on_map = pyqtSignal(float, float)  # scene x, scene y
 
-    def __init__(self, scene, parent=None):
-        super().__init__(scene, parent)
-        self._current_scale = 1.0
-        self._auto_fit = True  # while True, resize will refit image
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
-        self.setRenderHints(
-            QPainter.Antialiasing | QPainter.SmoothPixmapTransform
-        )
-        self.setDragMode(QGraphicsView.ScrollHandDrag)  # left-drag to pan
-        self.setMouseTracking(True)
+        # Render quality
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        # Panning
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+
+        # Hide scrollbars
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # Zoom control (relative to base transform)
+        self._base_m11 = 1.0   # scale after initial fit
+        self._max_factor = 8.0 # you can zoom in up to 8×
+        self._user_zoomed = False
+
+    def set_base_transform_from_current(self):
+        """
+        Called after we do fitInView once, when the widget
+        already has its final (maximized) size.
+        """
+        m11 = self.transform().m11()
+        if m11 <= 0:
+            m11 = 1.0
+        self._base_m11 = m11
+        self._user_zoomed = False
+
+    def _zoom(self, factor: float):
+        """
+        Zoom but don't allow zooming out smaller than the fitted size.
+        """
+        cur = self.transform().m11()
+        if cur <= 0:
+            cur = self._base_m11
+
+        # current factor relative to fitted size
+        rel = cur / self._base_m11
+        new_rel = rel * factor
+
+        # clamp between 1× and max_factor
+        if new_rel < 1.0:
+            new_rel = 1.0
+        if new_rel > self._max_factor:
+            new_rel = self._max_factor
+
+        # convert back to scale factor for this step
+        if rel <= 0:
+            rel = 1.0
+        step_factor = new_rel / rel
+
+        self.scale(step_factor, step_factor)
+        self._user_zoomed = True
 
     def wheelEvent(self, event):
-        # Zoom in/out with mouse wheel
-        angle = event.angleDelta().y()
-        if angle == 0:
-            return
-
-        factor = 1.25 if angle > 0 else 0.8
-        self._current_scale *= factor
-        self._auto_fit = False  # user is manually zooming now
-        self.scale(factor, factor)
-
-    def resizeEvent(self, event):
-        # When window resizes, auto-fit image as long as user hasn't zoomed
-        super().resizeEvent(event)
-        if self._auto_fit and self.scene():
-            rect = self.scene().itemsBoundingRect()
-            if not rect.isNull():
-                self.fitInView(rect, Qt.KeepAspectRatio)
+        # Mouse wheel zoom
+        if event.angleDelta().y() > 0:
+            self._zoom(1.25)
+        else:
+            self._zoom(0.8)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             scene_pos = self.mapToScene(event.pos())
-            self.clicked.emit(scene_pos.x(), scene_pos.y())
+            self.clicked_on_map.emit(scene_pos.x(), scene_pos.y())
         super().mousePressEvent(event)
 
 
-class MapSelector(QWidget):
+class MapSelector(QDialog):
     """
-    Popup-like widget:
-    - Shows Beirut map in a zoomable QGraphicsView
-    - User can zoom with scroll, pan, and click to drop a pin
-    - Confirm button converts pin to (lat, lon) and emits location_selected
+    Fullscreen map selector dialog.
+
+    - Shows Beirut map image.
+    - User can pan, zoom with + / − (and wheel).
+    - Cannot zoom out smaller than the initial fitted size.
+    - Click to place a pin.
+    - Confirm to emit location_selected(lat, lon).
+    - Has a .label attribute for instructions (used from main.py).
     """
     location_selected = pyqtSignal(float, float)  # lat, lon
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setWindowTitle("Select location on map")
+        self.setModal(True)
 
-        # ---- Instruction label ----
-        self.info_label = QLabel(
-            "Try to approximately locate your pick up location on the map.\n"
-            "Scroll to zoom, drag to move, and click to drop a pin."
-        )
-        self.info_label.setAlignment(Qt.AlignCenter)
+        # We'll fit the image AFTER the dialog is shown (see showEvent)
+        self._did_initial_fit = False
 
-        # Resolve image path relative to THIS file (client/)
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        img_path = os.path.join(base_dir, "assets", "beirut_map.png")
+        # ----- Top instruction label -----
+        self.label = QLabel("Try to approximately locate your pickup location.")
+        self.label.setWordWrap(True)
 
-        pixmap = QPixmap(img_path)
+        # ----- Graphics view / scene -----
+        self.view = MapGraphicsView(self)
+        self.scene = QGraphicsScene(self)
+        self.view.setScene(self.scene)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.addWidget(self.info_label)
+        # Load map image
+        map_path = os.path.join(os.path.dirname(__file__), "assets", "beirut_map.png")
+        pix = QPixmap(map_path)
 
-        self.pixmap = None
-        self.view = None
-        self.marker_item = None
-        self._selected_x = None
-        self._selected_y = None
-
-        if pixmap.isNull():
-            # If image not found, show a message instead of crashing / freezing
-            error_label = QLabel(f"Could not load map image:\n{img_path}")
-            error_label.setAlignment(Qt.AlignCenter)
-            layout.addWidget(error_label)
+        if pix.isNull():
+            # Fallback: show an error message if the file isn't found
+            self.label.setText(
+                f"Map image not found at:\n{map_path}\n\n"
+                "Please check the file path / name."
+            )
+            self.pixmap_item = None
         else:
-            self.pixmap = pixmap
+            self.pixmap_item = self.scene.addPixmap(pix)
+            self.scene.setSceneRect(self.pixmap_item.boundingRect())
 
-            scene = QGraphicsScene(self)
-            self.pixmap_item = scene.addPixmap(self.pixmap)
+        # ----- Buttons (zoom + confirm/cancel) -----
+        btn_zoom_out = QPushButton("−")
+        btn_zoom_in = QPushButton("+")
+        btn_cancel = QPushButton("Cancel")
+        btn_confirm = QPushButton("Confirm location")
 
-            self.view = MapView(scene, self)
-            layout.addWidget(self.view, 1)
+        btn_zoom_in.clicked.connect(lambda: self.view._zoom(1.25))
+        btn_zoom_out.clicked.connect(lambda: self.view._zoom(0.8))
+        btn_cancel.clicked.connect(self.reject)
+        btn_confirm.clicked.connect(self._on_confirm)
 
-            # Initial fit; resizeEvent will refit until user zooms
-            self.view.setSceneRect(self.pixmap_item.boundingRect())
-            self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
-
-            # MapView will emit scene coordinates on click
-            self.view.clicked.connect(self.on_scene_clicked)
-
-        # ---- Buttons row ----
         btn_row = QHBoxLayout()
+        btn_row.addWidget(btn_zoom_out)
+        btn_row.addWidget(btn_zoom_in)
         btn_row.addStretch(1)
-        self.btn_confirm = QPushButton("Confirm location")
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_confirm.setEnabled(False)  # no pin yet
+        btn_row.addWidget(btn_cancel)
+        btn_row.addWidget(btn_confirm)
 
-        btn_row.addWidget(self.btn_confirm)
-        btn_row.addWidget(self.btn_cancel)
-        btn_row.addStretch(1)
+        # ----- Main layout -----
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.label)
+        layout.addWidget(self.view, 1)
         layout.addLayout(btn_row)
 
-        self.btn_confirm.clicked.connect(self.on_confirm)
-        self.btn_cancel.clicked.connect(self.close)
+        # State for selected point
+        self.pin_item = None
+        self.selected_lat = None
+        self.selected_lon = None
 
-        # Beirut approx bounding box
-        self.min_lat = 33.85
-        self.max_lat = 33.93
-        self.min_lon = 35.45
-        self.max_lon = 35.57
+        # Connect click signal
+        self.view.clicked_on_map.connect(self.on_map_clicked)
 
-        # Make it feel like a popup
-        self.setWindowFlags(
-            self.windowFlags()
-            | Qt.WindowStaysOnTopHint
-            | Qt.Dialog
+    # ------------------------------------------------------------------
+    # Fit-to-window happens here, when we actually know the window size
+    # ------------------------------------------------------------------
+    def showEvent(self, event):
+        super().showEvent(event)
+
+        if self.pixmap_item and not self._did_initial_fit:
+            # Now the dialog is shown (and if you called showMaximized(),
+            # it's already maximized), so we can fit to the real size.
+            self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+            self.view.set_base_transform_from_current()
+            self._did_initial_fit = True
+
+    # ------------------------------------------------------------------
+    # Map click handling + fake geo mapping
+    # ------------------------------------------------------------------
+    def on_map_clicked(self, x: float, y: float):
+        if not self.pixmap_item:
+            return
+
+        # Remove old pin if any
+        if self.pin_item:
+            self.scene.removeItem(self.pin_item)
+
+        r = 6
+        pen = QPen(Qt.red)
+        brush = QBrush(Qt.red)
+        self.pin_item = self.scene.addEllipse(x - r, y - r, 2 * r, 2 * r, pen, brush)
+
+        rect = self.pixmap_item.boundingRect()
+        nx = (x - rect.left()) / rect.width()
+        ny = (y - rect.top()) / rect.height()
+
+        nx = max(0.0, min(1.0, nx))
+        ny = max(0.0, min(1.0, ny))
+
+        # Rough bounding box around Beirut (tweak if you want better alignment)
+        lat_top = 33.95
+        lat_bottom = 33.85
+        lon_left = 35.45
+        lon_right = 35.55
+
+        # y grows downward → invert for latitude
+        self.selected_lat = lat_top + (lat_bottom - lat_top) * ny
+        self.selected_lon = lon_left + (lon_right - lon_left) * nx
+
+        self.label.setText(
+            f"Location selected ✓  (approx lat={self.selected_lat:.5f}, lon={self.selected_lon:.5f})"
         )
 
-    # ------------------------------------------------------------------
-    # Click handling: drop / move marker
-    # ------------------------------------------------------------------
-    def on_scene_clicked(self, sx: float, sy: float):
-        if not self.pixmap:
+    def _on_confirm(self):
+        if self.selected_lat is None or self.selected_lon is None:
+            QMessageBox.warning(self, "No location selected", "Please click on the map first.")
             return
-
-        w = self.pixmap.width()
-        h = self.pixmap.height()
-        if w <= 0 or h <= 0:
-            return
-
-        # Clamp inside image bounds
-        x = max(0.0, min(sx, float(w)))
-        y = max(0.0, min(sy, float(h)))
-
-        self._selected_x = x
-        self._selected_y = y
-
-        # Add or move marker (small red circle)
-        if self.marker_item is None:
-            radius = 6
-            pen = QPen(QColor("#ef4444"))     # red outline
-            brush = QBrush(QColor("#f97373")) # softer fill
-            self.marker_item = self.view.scene().addEllipse(
-                x - radius,
-                y - radius,
-                radius * 2,
-                radius * 2,
-                pen,
-                brush,
-            )
-        else:
-            rect = self.marker_item.rect()
-            radius = rect.width() / 2.0
-            self.marker_item.setRect(
-                x - radius,
-                y - radius,
-                radius * 2,
-                radius * 2,
-            )
-
-        # Now user can confirm
-        self.btn_confirm.setEnabled(True)
-
-    # ------------------------------------------------------------------
-    # Confirm: compute lat/lon and emit
-    # ------------------------------------------------------------------
-    def on_confirm(self):
-        if self._selected_x is None or self._selected_y is None or not self.pixmap:
-            return
-
-        w = self.pixmap.width()
-        h = self.pixmap.height()
-        if w <= 0 or h <= 0:
-            return
-
-        x = self._selected_x
-        y = self._selected_y
-
-        # Convert pixel → longitude (left to right)
-        lon = self.min_lon + (x / w) * (self.max_lon - self.min_lon)
-
-        # Convert pixel → latitude (top to bottom; y increases downward)
-        lat = self.max_lat - (y / h) * (self.max_lat - self.min_lat)
-
-        if isfinite(lat) and isfinite(lon):
-            self.location_selected.emit(lat, lon)
-            self.close()
+        self.location_selected.emit(self.selected_lat, self.selected_lon)
+        self.accept()
