@@ -717,6 +717,8 @@ def _ride_accept(conn_state, payload, mid):
         # 2) Resolve driver's reachable endpoint from DRIVER_PEERS
         with STATE_LOCK:
             driver_ip, driver_port = DRIVER_PEERS.get(driver_id, (None, None))
+        if driver_ip is None or driver_port is None:
+            return {"type":"ERROR","id":mid,"payload":{"code":"BAD_REQUEST","message":"driver P2P endpoint unknown"}}
 
         if driver_id not in ACTIVE_REQUEST_DRIVERS.get(f"req_{req_id_int}", set()):
             return {"type":"ERROR","id":mid,"payload":{"code":"FORBIDDEN","message":"not eligible for this request"}}
@@ -958,10 +960,7 @@ def handle_message(msg: dict, conn_state: dict):
                     ip = conn_state["peer"][0] if conn_state.get("peer") else None
 
 
-                    old = DRIVER_PEERS.get(uid)
-                    peer_port = old[1] if old else None
-
-                    DRIVER_PEERS[uid] = (ip, peer_port)
+                    
             else:
                 with STATE_LOCK:
                     ONLINE_DRIVERS.pop(uid, None)
@@ -999,8 +998,7 @@ def handle_message(msg: dict, conn_state: dict):
                     with STATE_LOCK:
                         ONLINE_DRIVERS[uid] = conn_state.get("sock")
                         ip = conn_state["peer"][0] if conn_state.get("peer") else None
-                        old = DRIVER_PEERS.get(uid)
-                        DRIVER_PEERS[uid] = (ip, old[1] if old else None)
+                        
                 else:
                     with STATE_LOCK:
                         ONLINE_DRIVERS.pop(uid, None)
