@@ -15,8 +15,13 @@ from PyQt5.QtWidgets import (
     QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
-from PyQt5.QtGui import QTextCursor
+from PyQt5.QtGui import QTextCursor, QPixmap
 from gui.p2p_chat_endpoint import P2PChatEndpoint
+
+import requests
+from io import BytesIO
+
+
 
 # ===== error popup for uncaught exceptions =====
 def excepthook(exc_type, exc, tb):
@@ -29,6 +34,10 @@ HOST = "127.0.0.1"
 PORT = 6000
 SOCKET_TIMEOUT = 4.0
 ENCODING = "utf-8"
+
+#==== weather api constants ======
+WEATHER_API_URL = "http://api.weatherapi.com/v1/current.json"
+WEATHER_API_KEY = "77ba44421ca942b892a154619252311"
 
 # ===== client helpers from client/net.py =====
 from client.net import send_json, recv_json
@@ -245,6 +254,68 @@ def apply_bento_theme(app: QApplication):
     }
     """)
 
+#====weather helpers ======
+
+
+def fetch_weather_for_coords(lat, lon):
+    if lat is None or lon is None:
+        return None
+
+    params = {
+        "key": WEATHER_API_KEY,
+        "q": f"{lat},{lon}",
+        "aqi": "no",
+    }
+    try:
+        response = requests.get(WEATHER_API_URL, params=params, timeout=4)
+        if not response.ok:
+            print("WeatherAPI error:", response.text)
+            return None
+
+        content = json.loads(response.content)
+
+        return {
+            "location_name": content["location"]["name"],
+            "country": content["location"]["country"],
+            "temp_c": content["current"]["temp_c"],
+            "condition_text": content["current"]["condition"]["text"],
+            "icon_url": "http:" + content["current"]["condition"]["icon"],
+        }
+    except Exception as e:
+        print("Weather fetch failed:", e)
+        return None
+
+def get_real_location():
+    return 33.8938, 35.5018 #beirut loc
+
+
+def on_refresh_clicked(self):
+    lat, lon = self._get_lat_lon()
+    if lat is None or lon is None:
+        self.lbl_status.setText("Location not available")
+        return
+
+    self.lbl_status.setText("Fetching weather...")
+    info = fetch_weather_for_coords(lat, lon)
+    if not info:
+        self.lbl_status.setText("Failed to fetch weather.")
+        return
+
+    self.lbl_status.setText(f"Weather for {info['location_name']}, {info['country']}")
+    self.lbl_details.setText(f"{info['temp_c']} °C – {info['condition_text']}")
+
+    
+    try:
+        icon_resp = requests.get(info["icon_url"], timeout=4)
+        pix = QPixmap()
+        pix.loadFromData(icon_resp.content)
+        self.lbl_icon.setPixmap(pix)
+    except:
+        pass
+
+
+
+
 
 # ===== validation regex (mirror server) =====
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$")
@@ -323,8 +394,10 @@ class JsonlSession(QObject):
 # Register form (unchanged, one-shot call – safe pre-login)
 # =============================================================================
 class RegisterForm(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, session = None, parent=None):
         super().__init__(parent)
+        self.session = session
+
         self.in_name = QLineEdit()
         self.in_email = QLineEdit()
         self.in_username = QLineEdit()
@@ -389,6 +462,12 @@ class RegisterForm(QWidget):
         self.err.setText(msg)
         self.err.setVisible(True)
 
+    def show_ok(self, msg):
+        self.err.setStyleSheet("color: #0a7a0a;")
+        self.err.setText(msg)
+        self.err.setVisible(True)
+
+
     def clear_error(self):
         self.err.setText("")
         self.err.setVisible(False)
@@ -437,31 +516,46 @@ class RegisterForm(QWidget):
         raise RuntimeError("No response from server")
 
     def on_submit(self):
+        # 1) Read inputs
+        name = self.in_name.text().strip()
+        email = self.in_email.text().strip()
+        username = self.in_username.text().strip()
+        password = self.in_password.text()
         area = self.in_area.text().strip()
+
+        # 2) Basic client-side validation
+        if not name:
+            self.show_error("Name is required.")
+            return
+        if not email:
+            self.show_error("Email is required.")
+            return
+        if not username:
+            self.show_error("Username is required.")
+            return
+        if not password:
+            self.show_error("Password is required.")
+            return
         if not area:
             self.show_error("Area is required.")
             return
 
-        # make sure user picked a location on the map
-        if self.selected_lat is None or self.selected_lon is None:
-            self.show_error("Please pick your location on the map.")
-            return
-
         payload = {
+            "name": name,
+            "email": email,
+            "username": username,
+            "password": password,
             "area": area,
-            "direction": self.cb_direction.currentText(),
-            "time_iso": self._iso_string(),
-            "lat": self.selected_lat,
-            "lon": self.selected_lon,
         }
 
         req = {
-            "type": "RIDE.REQUEST_REQ",
+            "type": "AUTH.REGISTER_REQ",
             "id": str(uuid.uuid4()),
-            "payload": payload
+            "payload": payload,
         }
 
         try:
+            # same session.request(...) you already use
             resp = self.session.request(req)
         except Exception as e:
             self.show_error(f"Network error: {e}")
@@ -470,26 +564,21 @@ class RegisterForm(QWidget):
         rtype = resp.get("type")
         p = resp.get("payload", {})
 
-        if rtype == "RIDE.REQUEST_RES":
-            req_id = p.get("request_id")
-            found = p.get("candidates_found", 0)
+        if rtype == "AUTH.REGISTER_RES":
+            # success toast / message
+            QMessageBox.information(self, "Success", "Account created. You can now log in.")
 
-            self.current_request_id = req_id
-            self.btn_cancel.setEnabled(True)
-            self.btn_submit.setEnabled(False)
 
-            self.lbl_request_id.setText(f"Request ID: {req_id}")
-            self.lbl_status.setText(f"Status: open — compatible drivers found: {found}")
-            self.show_ok("Ride request created.")
-            self.poll_timer.start()
+            # clear form fields
+            self.in_name.clear()
+            self.in_email.clear()
+            self.in_username.clear()
+            self.in_password.clear()
+            self.in_area.clear()
 
         elif rtype == "ERROR":
-            code = p.get("code")
-            msg = p.get("message", "Failed to create ride request")
-
-            if code == "PASSENGER_BUSY":
-                self.current_request_id = None
-                self.btn_cancel.setEnabled(False)
+            # server sends codes like AUTH_USERNAME_TAKEN, AUTH_EMAIL_TAKEN, BAD_REQUEST...
+            msg = p.get("message", "Failed to register.")
             self.show_error(msg)
         else:
             self.show_error(f"Unexpected response: {rtype}")
@@ -561,7 +650,8 @@ class LoginForm(QWidget):
             resp = self.session.request(req)  # same socket stays open
         except Exception as e:
             self.show_error(f"Network error: {e}"); return
-        rtype = resp.get("type"); payload = resp.get("payload",{})
+        rtype = resp.get("type")
+        payload = resp.get("payload",{})
         if rtype == "AUTH.LOGIN_RES":
             user_preview = payload.get("user", {})
             self.logged_in.emit(user_preview)
@@ -585,7 +675,8 @@ class ProfileScreen(QWidget):
             "name": user_preview.get("name", ""),
             "email": user_preview.get("email", ""),
             "area": user_preview.get("area", ""),
-            "is_driver": bool(user_preview.get("is_driver", False))
+            "is_driver": bool(user_preview.get("is_driver", False)),
+            
         }
 
         self.in_name = QLineEdit(self.snapshot["name"])
@@ -633,6 +724,19 @@ class ProfileScreen(QWidget):
         self.err = QLabel(""); self.err.setWordWrap(True); self.err.setStyleSheet("color: red;"); self.err.setVisible(False)
         self.ok = QLabel(""); self.ok.setWordWrap(True); self.ok.setStyleSheet("color: #0a7a0a;"); self.ok.setVisible(False)
 
+        self.weather_icon = QLabel()
+        self.weather_icon.setFixedSize(48,48)
+        self.weather_icon.setScaledContents(True)
+
+        self.weather_label = QLabel("")
+        self.weather_label.setWordWrap(False)
+
+        weather_row = QHBoxLayout()
+        weather_row.addWidget(self.weather_icon)
+        weather_row.addWidget(self.weather_label,1)
+
+        
+
         self.btn_edit = QPushButton("Edit")
         self.btn_save = QPushButton("Save")
         self.btn_cancel = QPushButton("Cancel")
@@ -647,6 +751,15 @@ class ProfileScreen(QWidget):
         root.addWidget(self.err)
         root.addWidget(self.ok)
         root.addSpacing(8)
+
+        root.addLayout(weather_row)
+
+        root.addSpacing(12)
+        
+        
+        root.addSpacing(8)
+
+
         buttons = QHBoxLayout()
         buttons.addWidget(self.btn_edit)
         buttons.addWidget(self.btn_save)
@@ -655,6 +768,7 @@ class ProfileScreen(QWidget):
         root.addStretch(1)
 
         self.set_edit_mode(False)
+        self.on_weather_clicked()
 
     def set_edit_mode(self, on: bool):
         editing = bool(on)
@@ -718,6 +832,34 @@ class ProfileScreen(QWidget):
             self.show_error(resp.get("payload", {}).get("message", "Failed to save profile."))
         else:
             self.show_error(f"Unexpected response: {resp.get('type')}")
+
+    def on_weather_clicked(self):
+        #bei loc
+        lat, lon = 33.8938, 35.5018
+
+        
+        self.weather_label.setWordWrap(False)
+        self.weather_label.setText("Today's weather in Beirut - loading...")
+        self.weather_icon.clear()
+
+        info = fetch_weather_for_coords(lat, lon)
+        if not info:
+            self.weather_label.setText("Today's weather in Beirut - unavailable.")
+            return
+
+        self.weather_label.setWordWrap(False) 
+        self.weather_label.setText(
+            f" Today's weather in Beirut - {info['temp_c']}°C — {info['condition_text']}"
+        )
+
+        try:
+            icon_resp = requests.get(info["icon_url"], timeout=4)
+            pix = QPixmap()
+            pix.loadFromData(icon_resp.content)
+            self.weather_icon.setPixmap(pix)
+        except Exception as e:
+            print("Weather icon failed:", e)
+
 
 # =============================================================================
 # ScheduleScreen
@@ -791,6 +933,8 @@ class ScheduleScreen(QWidget):
         root.addWidget(self.err)
         root.addWidget(self.ok)
         root.addSpacing(8)
+
+        
         root.addWidget(self.table, 1)
         root.addLayout(btns)
 
@@ -1245,9 +1389,6 @@ class RideRequestPage(QWidget):
 # Driver Ride Request Fullfuliment Page
 # =============================================================================
 
-
-
-
 class DriverRidePage(QWidget):
     rideAccepted = pyqtSignal(str, dict)  # emit request_id when a ride is accepted
     def __init__(self, session: JsonlSession, parent=None):
@@ -1582,7 +1723,7 @@ class MainWindow(QMainWindow):
         v_auth = QVBoxLayout(self.auth_page)
         tabs = QTabWidget()
         self.login_tab = LoginForm(self.session)
-        self.register_tab = RegisterForm()
+        self.register_tab = RegisterForm(self.session)
         tabs.addTab(self.login_tab, "Login")
         tabs.addTab(self.register_tab, "Register")
         v_auth.addWidget(tabs, 1)
