@@ -676,6 +676,8 @@ class ProfileScreen(QWidget):
             "email": user_preview.get("email", ""),
             "area": user_preview.get("area", ""),
             "is_driver": bool(user_preview.get("is_driver", False)),
+            "rating_avg": user_preview.get("rating_avg", 0.0),
+            "rating_count": user_preview.get("rating_count", 0),
             
         }
 
@@ -719,6 +721,11 @@ class ProfileScreen(QWidget):
         form.addRow("Name:", self.in_name)
         form.addRow("Email:", self.in_email)
         form.addRow("Area:", self.in_area)
+        self.rating_label = QLabel("")
+        self.rating_label.setStyleSheet("font-size: 11pt; color: #e5e7eb;")
+        form.addRow("Rating:", self.rating_label)
+
+        self._update_rating_label()
         form.addRow("", self.chk_driver)
 
         self.err = QLabel(""); self.err.setWordWrap(True); self.err.setStyleSheet("color: red;"); self.err.setVisible(False)
@@ -828,6 +835,8 @@ class ProfileScreen(QWidget):
             self.show_ok("Profile saved.")
             if prev_driver != self.snapshot["is_driver"]:
                 self.driverModeChanged.emit(self.snapshot["is_driver"])
+            self._update_rating_label()
+  
         elif resp.get("type") == "ERROR":
             self.show_error(resp.get("payload", {}).get("message", "Failed to save profile."))
         else:
@@ -859,6 +868,18 @@ class ProfileScreen(QWidget):
             self.weather_icon.setPixmap(pix)
         except Exception as e:
             print("Weather icon failed:", e)
+
+    def _update_rating_label(self):
+        avg = self.snapshot.get("rating_avg")
+        count = self.snapshot.get("rating_count")
+
+        if count is None or count == 0:
+            self.rating_label.setText("No ratings yet")
+            return
+
+        # format avg to 1 decimal place
+        avg_str = f"{avg:.1f}"
+        self.rating_label.setText(f"{avg_str} ★ ({count})")
 
 
 # =============================================================================
@@ -1135,6 +1156,12 @@ class RideRequestPage(QWidget):
         self.cb_direction.addItems(["to_AUB", "from_AUB"])
         self.cb_direction.currentTextChanged.connect(self._update_direction_hints)
 
+        #rating
+        self.cb_min_driver_rating = QComboBox()
+        self.cb_min_driver_rating.addItem("Any driver rating", None)
+        for stars in range(1, 6):
+            self.cb_min_driver_rating.addItem(f"{stars}+ stars", float(stars))
+
 
         self.dt = QDateTimeEdit(QDateTime.currentDateTime())
         self.dt.setDisplayFormat("yyyy-MM-dd HH:mm")
@@ -1160,6 +1187,7 @@ class RideRequestPage(QWidget):
         form.addRow("Area:", self.in_area)
         form.addRow("", self.btn_pick_location)       # MAP BUTTON HERE
         form.addRow("Direction:", self.cb_direction)
+        form.addRow("Min driver rating:", self.cb_min_driver_rating)
         form.addRow("Departure Time:", self.dt)
 
         self.err = QLabel("")
@@ -1211,6 +1239,14 @@ class RideRequestPage(QWidget):
 
     def _iso_string(self) -> str:
         return self.dt.dateTime().toString("yyyy-MM-dd HH:mm")
+    
+    def _min_driver_rating(self):
+        idx = self.cb_min_driver_rating.currentIndex()
+        val = self.cb_min_driver_rating.itemData(idx)
+        if isinstance(val, (int, float)):
+            return float(val)
+        return None
+
 
     # =====================================================================
     # MAP HANDLERS
@@ -1275,6 +1311,10 @@ class RideRequestPage(QWidget):
             "lat": float(self.selected_lat),
             "lon": float(self.selected_lon),
         }
+
+        min_rating = self._min_driver_rating()
+        if min_rating is not None:
+            payload["min_driver_rating"] = min_rating
 
         req = {"type": "RIDE.REQUEST_REQ", "id": str(uuid.uuid4()), "payload": payload}
 
@@ -1395,6 +1435,13 @@ class DriverRidePage(QWidget):
         super().__init__(parent)
         self.session = session
 
+        # Rating filter: only show requests from passengers above threshold
+        self.cb_min_passenger_rating = QComboBox()
+        self.cb_min_passenger_rating.addItem("Any passenger rating", None)
+        for stars in range(1, 6):
+            self.cb_min_passenger_rating.addItem(f"{stars}+ stars", float(stars))
+
+
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Request ID", "Area", "Direction", "Departure Time"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -1418,6 +1465,9 @@ class DriverRidePage(QWidget):
         self.btn_accept.clicked.connect(self.on_accept_selected)
 
         top = QHBoxLayout()
+        top.addWidget(QLabel("Filter:"))
+        top.addWidget(self.cb_min_passenger_rating)
+        top.addSpacing(12)
         top.addWidget(self.btn_refresh)
         top.addWidget(self.btn_accept)
         top.addStretch(1)
@@ -1448,10 +1498,16 @@ class DriverRidePage(QWidget):
         self.err.setVisible(False)
 
     def refresh(self):
+
+        payload = {}
+        min_rating = self._min_passenger_rating()
+        if min_rating is not None:
+            payload["min_passenger_rating"] = min_rating
+
         req = {
             "type": "RIDE.LIST_REQ",
             "id": str(uuid.uuid4()),
-            "payload": {},
+            "payload": payload,
         }
         try:
             resp = self.session.request(req)
@@ -1541,6 +1597,14 @@ class DriverRidePage(QWidget):
     
     def add_broadcast(self, payload):
         self.refresh()
+    
+    def _min_passenger_rating(self):
+        idx = self.cb_min_passenger_rating.currentIndex()
+        val = self.cb_min_passenger_rating.itemData(idx)
+        if isinstance(val, (int, float)):
+            return float(val)
+        return None
+
 
 # =============================================================================
 # Passenger/Driver Ride Completion Page

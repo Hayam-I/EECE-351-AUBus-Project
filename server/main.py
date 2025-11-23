@@ -405,7 +405,8 @@ def profile_get(current_user_id: int, payload: dict, mid):
             "name": row[1],
             "area": row[6],
             "is_driver": bool(row[5]),
-            "rating": float(row[8]) if row[8] is not None else 0.0,
+            "rating_avg": row[8],
+            "rating_count": row[9],
         }
         return {"type": "PROFILE.GET_RES", "id": mid, "payload": {"user": user}}
     except Exception:
@@ -1171,6 +1172,17 @@ def handle_message(msg: dict, conn_state: dict):
         lat = p.get("lat")
         lon = p.get("lon")
 
+        # Optional: minimum driver rating (1–5) requested by passenger
+        min_driver_rating = p.get("min_driver_rating")
+        if isinstance(min_driver_rating, (int, float)):
+            min_driver_rating = float(min_driver_rating)
+            # clamp to sensible range or disable if nonsense
+            if not (0.0 <= min_driver_rating <= 5.0):
+                min_driver_rating = None
+        else:
+            min_driver_rating = None
+
+
         if not isinstance(area, str) or not area.strip():
             return {
                 "type": "ERROR",
@@ -1246,7 +1258,12 @@ def handle_message(msg: dict, conn_state: dict):
             #    area is *ignored* for matching now.
             cur.execute(
                 """
-                SELECT s.user_id, s.depart_time, s.lat, s.lon
+                SELECT s.user_id,
+                       s.depart_time,
+                       s.lat,
+                       s.lon,
+                       u.rating_avg,
+                       u.rating_count
                 FROM schedules s
                 JOIN users u ON u.user_id = s.user_id
                 WHERE s.weekday=? AND s.direction=? AND u.is_driver=1
@@ -1254,6 +1271,7 @@ def handle_message(msg: dict, conn_state: dict):
                 (weekday_sun0, direction),
             )
             rows = cur.fetchall()
+
             conn.commit()
             conn.close()
 
@@ -1261,7 +1279,13 @@ def handle_message(msg: dict, conn_state: dict):
             RADIUS_KM = 1.0
 
             candidate_ids = []
-            for driver_id, depart_hhmm, dlat, dlon in rows:
+            for driver_id, depart_hhmm, dlat, dlon, rating_avg, rating_count in rows:
+                #rating 
+                if min_driver_rating is not None:
+                    driver_rating = float(rating_avg) if rating_avg is not None else 0.0
+                    if driver_rating < min_driver_rating:
+                        continue
+
                 # Require driver to have a pin as well
                 try:
                     dlat = float(dlat)
@@ -1333,6 +1357,17 @@ def handle_message(msg: dict, conn_state: dict):
         _ok, derr = require_driver(conn_state, mid)
         if derr:
             return derr
+        
+        #rating
+        p = payload or {}
+        min_passenger_rating = p.get("min_passenger_rating")
+        if isinstance(min_passenger_rating, (int, float)):
+            min_passenger_rating = float(min_passenger_rating)
+            if not (0.0 <= min_passenger_rating <= 5.0):
+                min_passenger_rating = None
+        else:
+            min_passenger_rating = None
+
 
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -1357,15 +1392,25 @@ def handle_message(msg: dict, conn_state: dict):
                     "payload": {"items": []},
                 }
 
-            # All open ride requests WITH lat/lon
+            # All open ride requests WITH lat/lon + rating
             cur.execute(
                 """
-                SELECT request_id, user_id, area, direction, departure_time, lat, lon
-                FROM ride_req
-                WHERE status='open'
+                SELECT r.request_id,
+                       r.user_id,
+                       r.area,
+                       r.direction,
+                       r.departure_time,
+                       r.lat,
+                       r.lon,
+                       u.rating_avg,
+                       u.rating_count
+                FROM ride_req AS r
+                JOIN users AS u ON u.user_id = r.user_id
+                WHERE r.status='open'
                 """
             )
             req_rows = cur.fetchall()
+
             conn.close()
 
             CUTOFF_MIN = 30
@@ -1373,7 +1418,13 @@ def handle_message(msg: dict, conn_state: dict):
 
             items = []
 
-            for req_id_int, passenger_id, area, direction, dep_time, plat, plon in req_rows:
+            for req_id_int, passenger_id, area, direction, dep_time, plat, plon, rating_avg, rating_count in req_rows:
+                #rating
+                if min_passenger_rating is not None:
+                    passenger_rating = float(rating_avg) if rating_avg is not None else 0.0
+                    if passenger_rating < min_passenger_rating:
+                        continue
+                
                 # Skip requests without coords
                 try:
                     plat = float(plat)
