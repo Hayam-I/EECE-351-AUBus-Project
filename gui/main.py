@@ -6,6 +6,7 @@ import socket
 import uuid
 import threading
 import logging
+import html
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
@@ -13,6 +14,7 @@ from PyQt5.QtWidgets import (
     QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
+from PyQt5.QtGui import QTextCursor
 from gui.p2p_chat_endpoint import P2PChatEndpoint
 
 # ===== error popup for uncaught exceptions =====
@@ -1228,10 +1230,27 @@ class CurrentRidePage(QWidget):
 
         self.chat_box = QTextEdit()
         self.chat_box.setReadOnly(True)
+        self.chat_box.setStyleSheet("""
+            QTextEdit {
+                background-color: #020617;
+                border-radius: 18px;
+                border: 1px solid rgba(148,163,184,0.35);
+                padding: 10px;
+            }
+        """)
+
         v.addWidget(self.chat_box, 1)
 
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Type a message...")
+        self.chat_input.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(15,23,42,0.9);
+                border-radius: 999px;
+                padding: 8px 12px;
+                border: 1px solid rgba(148,163,184,0.35);
+            }
+        """)
         v.addWidget(self.chat_input)
 
         h = QHBoxLayout()
@@ -1246,6 +1265,64 @@ class CurrentRidePage(QWidget):
 
         
         self.send_btn.clicked.connect(self.on_send_clicked)
+    
+    def append_bubble(self, text: str, outgoing: bool, timestamp=None):
+        """
+        Render a single message as a left/right chat bubble
+        with rounded corners and a small timestamp.
+        """
+        if not text:
+            return
+
+        safe = html.escape(text).replace("\n", "<br/>")
+
+        if outgoing:
+            align = "right"
+            bg = "#4f46e5"   # indigo
+            fg = "#f9fafb"
+            label = "You"
+        else:
+            align = "left"
+            bg = "#111827"   # dark gray
+            fg = "#e5e7eb"
+            label = "Them"
+
+        if timestamp is None:
+            timestamp = QDateTime.currentDateTime()
+        ts_str = timestamp.toString("HH:mm")
+
+        # table trick so Qt actually honors left/right alignment
+        bubble_html = f"""
+        <table width="100%" cellspacing="0" cellpadding="0">
+          <tr>
+            <td align="{align}">
+              <span style="
+                  background-color:{bg};
+                  color:{fg};
+                  padding:8px 12px;
+                  border-radius:18px;
+                  font-size:10pt;
+                  display:inline-block;
+              ">
+                <span style="font-size:8pt; opacity:0.7;">{label}:</span>
+                {safe}
+                <span style="font-size:8pt; opacity:0.6; margin-left:8px;">
+                  {ts_str}
+                </span>
+              </span>
+            </td>
+          </tr>
+        </table>
+        """
+
+        cursor = self.chat_box.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.chat_box.setTextCursor(cursor)
+        self.chat_box.insertHtml(bubble_html)
+        self.chat_box.moveCursor(QTextCursor.End)
+        self.chat_box.ensureCursorVisible()
+
+
 
     def on_send_clicked(self):
         msg = self.chat_input.text().strip()
@@ -1256,11 +1333,11 @@ class CurrentRidePage(QWidget):
         if hasattr(mw, "send_chat_message"):
             ok = mw.send_chat_message(msg)
         
-        if ok:
-            self.chat_box.append(f"You: {msg}")
-            self.chat_input.clear()
-        else:
-            QMessageBox.warning(self, "Send Failed", "Failed to send message.")
+            if ok:
+                self.append_bubble(msg, outgoing=True)
+                self.chat_input.clear()
+            else:
+                QMessageBox.warning(self, "Send Failed", "Failed to send message.")
 
     def load_for_driver(self, match_payload):
         """
@@ -1508,10 +1585,10 @@ class MainWindow(QMainWindow):
         self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
 
         # let the driver see that the passenger connected
-        if hasattr(self, "current_ride_page") and self.current_ride_page:
-            self.current_ride_page.chat_box.append(
-                f"<i>Passenger connected from {addr[0]}:{addr[1]}</i>"
-            )
+        # if hasattr(self, "current_ride_page") and self.current_ride_page:
+        #     self.current_ride_page.chat_box.append(
+        #         f"<i>Passenger connected from {addr[0]}:{addr[1]}</i>"
+        #     )
 
     def start_p2p_listener(self):
         """Start a simple TCP listener for driver P2P and announce it via PEER.OPEN_REQ."""
@@ -1602,15 +1679,15 @@ class MainWindow(QMainWindow):
 
 
     def on_p2p_message(self, text: str):
-        if self.current_ride_page is not None:
-            self.current_ride_page.chat_box.append(f"Them: {text}")
-        else:
-            print("on_p2p_message but no current_ride_page!", text)
+        page = getattr(self, "current_ride_page", None)
+        if page is not None:
+            page.append_bubble(text, outgoing = False)
+        
 
     def on_p2p_disconnected(self):
         """Handle P2P disconnect."""
         if hasattr(self, "current_ride_page") and self.current_ride_page is not None:
-            self.current_ride_page.chat_box.append("<i>Chat disconnected.</i>")
+            self.current_ride_page.append_bubble("<i>Chat disconnected.</i>", outgoing = False)
         if getattr(self, "chat_endpoint", None) is not None:
             self.chat_endpoint = None
 
@@ -1656,10 +1733,11 @@ class MainWindow(QMainWindow):
                         self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
                         self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
 
-                        self.current_ride_page.chat_box.append(f"<i>Connected to driver for chat</i>")
+                        #self.current_ride_page.chat_box.append(f"<i>Connected to driver for chat</i>")
 
                 else:
-                    self.current_ride_page.chat_box.append(f"<i>Driver did not provide chat info</i>")
+                    if self.current_ride_page is not None:
+                        self.current_ride_page.append_bubble(f"<i>Driver did not provide chat info</i>", outgoing = False)
         
         
         
