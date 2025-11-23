@@ -915,6 +915,102 @@ def _ride_complete(conn_state, payload, mid):
     _free_driver(driver_id)
     return {"type":"RIDE.COMPLETE_RES", "id":mid, "payload":{}}
 
+def _ride_rate(conn_state, payload, mid):
+    """Handle RIDE.RATE_REQ: one side rates the other after a completed ride."""
+    rater_id, err = require_logged_in(conn_state, mid)
+    if err:
+        return err
+
+    p = payload or {}
+    req_s = p.get("request_id")
+    rating = p.get("rating")
+
+    # validate request_id
+    req_id_int = _reqid_to_int(req_s)
+    if not isinstance(req_id_int, int):
+        return {"type": "ERROR", "id": mid,
+                "payload": {"code": "BAD_REQUEST", "message": "invalid request_id"}}
+
+    # validate rating
+    if not isinstance(rating, int) or not (1 <= rating <= 5):
+        return {"type": "ERROR", "id": mid,
+                "payload": {"code": "BAD_REQUEST", "message": "rating must be 1–5"}}
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        # find match
+        cur.execute(
+            "SELECT match_id, user_id, driver_id, status FROM matches WHERE request_id=?",
+            (req_id_int,)
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return {"type": "ERROR", "id": mid,
+                    "payload": {"code": "NOT_FOUND",
+                                "message": "match not found"}}
+
+        match_id, passenger_id, driver_id, status = row
+
+        # determine who is being rated
+        if rater_id == driver_id:
+            ratee_id = passenger_id
+        elif rater_id == passenger_id:
+            ratee_id = driver_id
+        else:
+            conn.close()
+            return {"type": "ERROR", "id": mid,
+                    "payload": {"code": "FORBIDDEN",
+                                "message": "you are not part of this ride"}}
+
+        # insert rating (1 per match per ratee)
+        try:
+            cur.execute(
+                "INSERT INTO ratings(match_id, user1_id, user2_id, stars) VALUES (?,?,?,?)",
+                (match_id, rater_id, ratee_id, rating)
+            )
+        except sqlite3.IntegrityError:
+            conn.close()
+            return {"type": "ERROR", "id": mid,
+                    "payload": {"code": "DUPLICATE",
+                                "message": "rating already submitted"}}
+
+        # update user aggregates
+        cur.execute("SELECT rating_sum, rating_count FROM users WHERE user_id=?",
+                    (ratee_id,))
+        s, c = cur.fetchone()
+        if s is None: s = 0
+        if c is None: c = 0
+
+        new_sum = s + rating
+        new_count = c + 1
+        new_avg = float(new_sum) / new_count
+
+        cur.execute(
+            "UPDATE users SET rating_sum=?, rating_count=?, rating_avg=? WHERE user_id=?",
+            (new_sum, new_count, new_avg, ratee_id)
+        )
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "type": "RIDE.RATE_RES",
+            "id": mid,
+            "payload": {"request_id": req_s, "rating": rating}
+        }
+
+    except Exception:
+        logging.exception("RIDE.RATE_REQ failed")
+        try: conn.close()
+        except: pass
+        return {"type": "ERROR", "id": mid,
+                "payload": {"code": "SERVER_ERROR",
+                            "message": "failed to record rating"}}
+
+
 def _cancel_active_matches_for_driver(driver_id: int):
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -1559,7 +1655,9 @@ def handle_message(msg: dict, conn_state: dict):
     if mtype == "RIDE.COMPLETE_REQ":
         return _ride_complete(conn_state, payload, mid)
 
-
+    if mtype == "RIDE.RATE_REQ":
+        return _ride_rate(conn_state, payload, mid)
+    
     # Unknown
     return {"type": "ERROR", "id": mid, "payload": {"code": "UNKNOWN_TYPE", "message": f"Unsupported type: {mtype}"}}
 
