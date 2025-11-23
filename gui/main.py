@@ -14,8 +14,8 @@ from PyQt5.QtWidgets import (
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
-from PyQt5.QtGui import QTextCursor, QPixmap, QFont
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject, QPointF
+from PyQt5.QtGui import QTextCursor, QPixmap, QIcon, QPolygonF, QColor, QPainter
 from gui.p2p_chat_endpoint import P2PChatEndpoint
 
 import requests
@@ -1707,31 +1707,24 @@ class StarRatingWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        star_font = QFont()
-        star_font.setFamily("Segoe UI Symbol")
-        star_font.setPointSize(20)
-        star_font.setBold(True)
+        self._pix_empty = self._make_star_pixmap(28, QColor("#4b5563"))   # grey
+        self._pix_filled = self._make_star_pixmap(28, QColor("#facc15"))  # yellow
 
-        self._buttons = []
+        self._buttons: list[QPushButton] = []
         for i in range(max_stars):
-            btn = QPushButton("★")
+            btn = QPushButton()
             btn.setCheckable(True)
             btn.setFlat(True)
-            btn.setFont(star_font)
+            btn.setIcon(QIcon(self._pix_empty))
+            btn.setIconSize(self._pix_empty.size())
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedSize(36, 36)
             btn.setStyleSheet("""
                 QPushButton {
                     border: none;
                     background-color: transparent;
-                    font-size: 20px;
+                    font-size: 22px;
                     color: #4b5563;
-                }
-                QPushButton:checked {
-                    color: #facc15;
-                }
-                QPushButton:hover {
-                    color: #eab308;
                 }
             """)
             btn.clicked.connect(lambda _=False, idx=i: self.set_rating(idx + 1))
@@ -1739,12 +1732,44 @@ class StarRatingWidget(QWidget):
             layout.addWidget(btn)
 
         layout.addStretch(1)
+    
+    def _make_star_pixmap(self, size: int, color: QColor) -> QPixmap:
+        """Draw a 5-point star into a transparent pixmap."""
+        import math
+
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(color)
+        painter.setPen(Qt.NoPen)
+
+        cx = cy = size / 2.0
+        outer_r = size * 0.45
+        inner_r = size * 0.20
+
+        points = []
+        # 10 points: outer, inner, outer, inner...
+        for i in range(10):
+            angle = math.pi / 2 + i * math.pi / 5  # start from top
+            r = outer_r if i % 2 == 0 else inner_r
+            x = cx + r * math.cos(angle)
+            y = cy - r * math.sin(angle)
+            points.append(QPointF(x, y))
+
+        poly = QPolygonF(points)
+        painter.drawPolygon(poly)
+        painter.end()
+        return pm
 
     def set_rating(self, value: int):
         value = max(0, min(self.max_stars, int(value)))
         self._rating = value
         for i, btn in enumerate(self._buttons, start=1):
-            btn.setChecked(i <= value)
+            filled = i <= value
+            btn.setChecked(filled)
+            btn.setIcon(QIcon(self._pix_filled if filled else self._pix_empty))
         self.ratingChanged.emit(self._rating)
 
     def rating(self) -> int:
@@ -1757,8 +1782,8 @@ class RatingDialog(QDialog):
         self.setWindowTitle(title)
         self.setModal(True)
 
-        self.setMinimumWidth(360)
-        self.setMaximumWidth(360)
+        self.setMinimumWidth(480)
+        self.setMaximumWidth(480)
 
         self.setStyleSheet("""
             QDialog {
