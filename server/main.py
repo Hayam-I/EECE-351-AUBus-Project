@@ -997,10 +997,21 @@ def _ride_rate(conn_state, payload, mid):
         conn.commit()
         conn.close()
 
+        cur.execute("SELECT name, email, area, is_driver, rating_avg, rating_count FROM users WHERE user_id=?", (rater_id,))
+        updated_row = cur.fetchone()
+        updated_user = {
+            "name": updated_row[0],
+            "email": updated_row[1],
+            "area": updated_row[2],
+            "is_driver": bool(updated_row[3]),
+            "rating_avg": updated_row[4],
+            "rating_count": updated_row[5],
+        }
+
         return {
             "type": "RIDE.RATE_RES",
             "id": mid,
-            "payload": {"request_id": req_s, "rating": rating}
+            "payload": {"request_id": req_s, "updated_user":updated_user}
         }
 
     except Exception:
@@ -1419,10 +1430,22 @@ def handle_message(msg: dict, conn_state: dict):
             items = []
 
             for req_id_int, passenger_id, area, direction, dep_time, plat, plon, rating_avg, rating_count in req_rows:
-                #rating
-                if min_passenger_rating is not None:
-                    passenger_rating = float(rating_avg) if rating_avg is not None else 0.0
-                    if passenger_rating < min_passenger_rating:
+                # --- A) Check passenger's min_driver_rating against THIS driver's rating ---
+                # Fetch driver's rating (average)
+                cur2 = sqlite3.connect(DB_PATH).cursor()
+                cur2.execute("SELECT rating_avg FROM users WHERE user_id=?", (driver_id,))
+                row = cur2.fetchone()
+                driver_rating_avg = float(row[0]) if row and row[0] is not None else 0.0
+
+                # Fetch passenger's required minimum rating for drivers
+                cur3 = sqlite3.connect(DB_PATH).cursor()
+                cur3.execute("SELECT min_driver_rating FROM ride_req WHERE request_id=?", (req_id_int,))
+                min_driver_rating_row = cur3.fetchone()
+                min_driver_rating_for_this_request = min_driver_rating_row[0] if min_driver_rating_row else None
+
+                # If passenger required a minimum & driver doesn’t meet it → SKIP
+                if min_driver_rating_for_this_request is not None:
+                    if driver_rating_avg < float(min_driver_rating_for_this_request):
                         continue
                 
                 # Skip requests without coords

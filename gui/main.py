@@ -2375,6 +2375,15 @@ class MainWindow(QMainWindow):
         payload = res.get("payload", {})
 
         if rtype == "RIDE.RATE_RES":
+            #updating profile
+            updated = payload.get("updated_user")
+            if updated:
+                self.user_preview.update(updated)
+
+                # If profile screen open, refresh it
+                if hasattr(self, "profile_page") and self.profile_page:
+                    self.profile_page.update_from_user_preview(self.user_preview)
+
             QMessageBox.information(self, "Thank you", "Your rating has been recorded.")
         elif rtype == "ERROR":
             msg = payload.get("message", "Failed to save rating.")
