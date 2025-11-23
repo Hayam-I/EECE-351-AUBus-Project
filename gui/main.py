@@ -6,6 +6,7 @@ import socket
 import uuid
 import threading
 import logging
+import html
 from client.map_selector import MapSelector
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
@@ -14,6 +15,8 @@ from PyQt5.QtWidgets import (
     QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
+from PyQt5.QtGui import QTextCursor
+from gui.p2p_chat_endpoint import P2PChatEndpoint
 
 # ===== error popup for uncaught exceptions =====
 def excepthook(exc_type, exc, tb):
@@ -261,6 +264,8 @@ class JsonlSession(QObject):
         self.sock: socket.socket | None = None
     
     def handle_push(self, msg: dict):
+        #debug message
+        print("PUSH from server:", msg.get("type"), msg.get("payload", {}))
         self.push_reveived.emit(msg)
 
     def ensure_connected(self):
@@ -1236,6 +1241,9 @@ class RideRequestPage(QWidget):
         except Exception as e:
             print(f"poll_for_match error: {e}")
 
+# =============================================================================
+# Driver Ride Request Fullfuliment Page
+# =============================================================================
 
 
 
@@ -1393,6 +1401,9 @@ class DriverRidePage(QWidget):
     def add_broadcast(self, payload):
         self.refresh()
 
+# =============================================================================
+# Passenger/Driver Ride Completion Page
+# =============================================================================
 class CurrentRidePage(QWidget):
     def __init__(self, session, parent=None):
         super().__init__(parent)
@@ -1405,14 +1416,31 @@ class CurrentRidePage(QWidget):
 
         self.chat_box = QTextEdit()
         self.chat_box.setReadOnly(True)
+        self.chat_box.setStyleSheet("""
+            QTextEdit {
+                background-color: #020617;
+                border-radius: 18px;
+                border: 1px solid rgba(148,163,184,0.35);
+                padding: 10px;
+            }
+        """)
+
         v.addWidget(self.chat_box, 1)
 
         self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("Type a message (dummy)...")
+        self.chat_input.setPlaceholderText("Type a message...")
+        self.chat_input.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(15,23,42,0.9);
+                border-radius: 999px;
+                padding: 8px 12px;
+                border: 1px solid rgba(148,163,184,0.35);
+            }
+        """)
         v.addWidget(self.chat_input)
 
         h = QHBoxLayout()
-        self.send_btn = QPushButton("Send (dummy)")
+        self.send_btn = QPushButton("Send")
         self.complete_btn = QPushButton("Complete Ride")
         h.addWidget(self.send_btn)
         h.addWidget(self.complete_btn)
@@ -1421,14 +1449,81 @@ class CurrentRidePage(QWidget):
         # hide complete button by default (passenger)
         self.complete_btn.hide()
 
-        # dummy chat
-        self.send_btn.clicked.connect(self.add_dummy_message)
+        
+        self.send_btn.clicked.connect(self.on_send_clicked)
+    
+    def append_bubble(self, text: str, outgoing: bool, timestamp=None):
+        """
+        Render a single message as a left/right chat bubble
+        with rounded corners and a small timestamp.
+        """
+        if not text:
+            return
 
-    def add_dummy_message(self):
+        safe = html.escape(text).replace("\n", "<br/>")
+
+        if outgoing:
+            align = "right"
+            bg = "#4f46e5"   # indigo
+            fg = "#f9fafb"
+            label = "You"
+        else:
+            align = "left"
+            bg = "#111827"   # dark gray
+            fg = "#e5e7eb"
+            label = "Them"
+
+        if timestamp is None:
+            timestamp = QDateTime.currentDateTime()
+        ts_str = timestamp.toString("HH:mm")
+
+        # table trick so Qt actually honors left/right alignment
+        bubble_html = f"""
+        <table width="100%" cellspacing="0" cellpadding="0">
+          <tr>
+            <td align="{align}">
+              <span style="
+                  background-color:{bg};
+                  color:{fg};
+                  padding:8px 12px;
+                  border-radius:18px;
+                  font-size:10pt;
+                  display:inline-block;
+              ">
+                <span style="font-size:8pt; opacity:0.7;">{label}:</span>
+                {safe}
+                <span style="font-size:8pt; opacity:0.6; margin-left:8px;">
+                  {ts_str}
+                </span>
+              </span>
+            </td>
+          </tr>
+        </table>
+        """
+
+        cursor = self.chat_box.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.chat_box.setTextCursor(cursor)
+        self.chat_box.insertHtml(bubble_html)
+        self.chat_box.moveCursor(QTextCursor.End)
+        self.chat_box.ensureCursorVisible()
+
+
+
+    def on_send_clicked(self):
         msg = self.chat_input.text().strip()
-        if msg:
-            self.chat_box.append(f"You: {msg}")
-            self.chat_input.clear()
+        if not msg:
+            return
+        mw = self.window()
+        ok = False
+        if hasattr(mw, "send_chat_message"):
+            ok = mw.send_chat_message(msg)
+        
+            if ok:
+                self.append_bubble(msg, outgoing=True)
+                self.chat_input.clear()
+            else:
+                QMessageBox.warning(self, "Send Failed", "Failed to send message.")
 
     def load_for_driver(self, match_payload):
         """
@@ -1460,6 +1555,7 @@ class CurrentRidePage(QWidget):
 # Main window: wires everything together
 # =============================================================================
 class MainWindow(QMainWindow):
+    incoming_p2p_connection = pyqtSignal(object, tuple)
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AUBus")
@@ -1472,6 +1568,9 @@ class MainWindow(QMainWindow):
 
         self.p2p_sock = None
         self.p2p_thread = None
+        self.chat_endpoint = None
+        self.incoming_p2p_connection.connect(self._on_incoming_p2p_connection)
+        
 
         self.active_request_id = None
 
@@ -1609,6 +1708,7 @@ class MainWindow(QMainWindow):
             self.ride_page = RideRequestPage(self.session)
 
         self.stack.addWidget(self.ride_page)
+        
 
     def closeEvent(self, event):
         """on window close, logout cleanly and close the session"""
@@ -1656,6 +1756,26 @@ class MainWindow(QMainWindow):
         self.btn_current.setEnabled(False)
         self.stack.setCurrentWidget(self.profile_page)
 
+    def _on_incoming_p2p_connection(self, conn, addr):
+        """Attach an incoming passenger P2P socket on the GUI thread."""
+        # close old chat endpoint if any
+        if getattr(self, "chat_endpoint", None) is not None:
+            try:
+                self.chat_endpoint.close()
+            except Exception:
+                pass
+
+        # wrap the accepted socket
+        self.chat_endpoint = P2PChatEndpoint(conn, self)
+        self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
+        self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
+
+        # let the driver see that the passenger connected
+        # if hasattr(self, "current_ride_page") and self.current_ride_page:
+        #     self.current_ride_page.chat_box.append(
+        #         f"<i>Passenger connected from {addr[0]}:{addr[1]}</i>"
+        #     )
+
     def start_p2p_listener(self):
         """Start a simple TCP listener for driver P2P and announce it via PEER.OPEN_REQ."""
         # If already running, do nothing
@@ -1701,12 +1821,17 @@ class MainWindow(QMainWindow):
                 try:
                     while True:
                         conn, addr = listener.accept()
-                        # minimal behavior: immediately close, or print
-                        print(f"P2P connection from {addr}, closing.")
-                        conn.close()
-                except Exception:
+                        print(f"P2P connection from {addr}")
+                        # hand off to GUI thread via signal
+                        self.incoming_p2p_connection.emit(conn, addr)
+                        # DO NOT close conn here – P2PChatEndpoint owns it now
+                except Exception as e:
+                    print("p2p_loop error:", e)
                     # any error → exit thread
                     pass
+
+
+
 
             t = threading.Thread(target=_p2p_loop, args=(s,), daemon=True)
             t.start()
@@ -1721,7 +1846,6 @@ class MainWindow(QMainWindow):
             self.p2p_sock = None
             self.p2p_thread = None
 
-
     def stop_p2p_listener(self):
         """Stop driver P2P listener if running."""
         if self.p2p_sock is not None:
@@ -1731,12 +1855,37 @@ class MainWindow(QMainWindow):
                 pass
         self.p2p_sock = None
         self.p2p_thread = None
+
+        if self.chat_endpoint is not None:
+            try:
+                self.chat_endpoint.close()
+            except Exception:
+                pass
+            self.chat_endpoint = None
+
+
+    def on_p2p_message(self, text: str):
+        page = getattr(self, "current_ride_page", None)
+        if page is not None:
+            page.append_bubble(text, outgoing = False)
+        
+
+    def on_p2p_disconnected(self):
+        """Handle P2P disconnect."""
+        if hasattr(self, "current_ride_page") and self.current_ride_page is not None:
+            self.current_ride_page.append_bubble("<i>Chat disconnected.</i>", outgoing = False)
+        if getattr(self, "chat_endpoint", None) is not None:
+            self.chat_endpoint = None
+
+    
     
     def on_push_received(self, msg: dict):
         t = msg.get("type")
         payload = msg.get("payload", {})
 
         if t == "RIDE.MATCHED":
+            #debug message
+            print("MainWindow: RIDE.MATCHED received, payload =", payload)
             self.btn_ride.setEnabled(False)
             self.btn_current.setEnabled(True)
 
@@ -1753,6 +1902,30 @@ class MainWindow(QMainWindow):
             else:
                 self.current_ride_page.load_for_passenger(payload)
                 self.on_ride_matched(msg)
+                driver_ip = payload.get("driver_ip")
+                driver_port = payload.get("driver_port")
+
+                if driver_ip and driver_port:
+                    try:
+                        sock  = socket.create_connection((driver_ip, int(driver_port)), timeout = 5.0)
+                        sock.settimeout(None)
+                    except Exception as e:
+                        QMessageBox.warning(self, "Chat", f"Could not connect to driver: {e}")
+                    else:
+                        if getattr(self, "chat_endpoint", None) is not None:
+                            self.chat_endpoint.close()
+                        
+                        self.chat_endpoint = P2PChatEndpoint(sock, self)
+                        self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
+                        self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
+
+                        #self.current_ride_page.chat_box.append(f"<i>Connected to driver for chat</i>")
+
+                else:
+                    if self.current_ride_page is not None:
+                        self.current_ride_page.append_bubble(f"<i>Driver did not provide chat info</i>", outgoing = False)
+        
+        
         
         elif t == "REQUEST.CLOSED":
             self.on_request_closed(msg)
@@ -1817,6 +1990,14 @@ class MainWindow(QMainWindow):
         self.current_ride_page.chat_box.clear()
         self.current_ride_page.info_label.setText("No active ride")
 
+        if self.chat_endpoint is not None:
+            try:
+                self.chat_endpoint.close()
+            except Exception:
+                pass
+            self.chat_endpoint = None
+
+
     def on_driver_ride_accepted(self, request_id: str, payload: dict):
         """
         Called when THIS driver accepts a ride successfully.
@@ -1838,6 +2019,29 @@ class MainWindow(QMainWindow):
         match_payload.setdefault("request_id", request_id)
 
         self.current_ride_page.load_for_driver(match_payload)
+
+    def send_chat_message(self, text: str) -> bool:
+        """Send a chat message over the active P2P endpoint.
+
+        Returns True on success, False on failure.
+        Also prints the exception so we know what went wrong.
+        """
+        ep = getattr(self, "chat_endpoint", None)
+        if ep is None:
+            print("send_chat_message: no chat_endpoint")
+            return False
+
+        try:
+            print("send_chat_message: sending:", repr(text))
+            ep.send(text)
+            print("send_chat_message: send() returned OK")
+            return True
+        except Exception as e:
+            import traceback
+            print("send_chat_message: ERROR while sending:", e)
+            traceback.print_exc()
+            return False
+
 
 
 
