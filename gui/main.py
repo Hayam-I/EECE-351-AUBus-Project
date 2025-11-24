@@ -373,7 +373,7 @@ class JsonlSession(QObject):
 
             # Otherwise, treat as push / unsolicited
             t = msg.get("type")
-            if t in ("RIDE.MATCHED", "REQUEST.CLOSED", "DRIVER.BROADCAST"):
+            if t in ("RIDE.MATCHED", "REQUEST.CLOSED", "DRIVER.BROADCAST", "PROFILE.UPDATED"):
                 self.handle_push(msg)
                 continue
 
@@ -885,10 +885,9 @@ class ProfileScreen(QWidget):
         """
         Update the profile fields when RIDE.RATE_RES returns new rating info.
         """
-        self.snapshot.update({
-            "rating_avg": preview.get("rating_avg", self.snapshot.get("rating_avg")),
-            "rating_count": preview.get("rating_count", self.snapshot.get("rating_count")),
-        })
+        self.snapshot["rating_avg"] = preview.get("rating_avg", self.snapshot.get("rating_avg"))
+        self.snapshot["rating_count"] = preview.get("rating_count", self.snapshot.get("rating_count"))
+
 
         # Update the rating label
         self._update_rating_label()

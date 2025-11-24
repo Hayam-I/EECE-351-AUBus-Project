@@ -58,6 +58,7 @@ DB_PATH = "database.db"
 a single request once one driver accepts it, but theres nothing that prevents that same driver from accepting another request later (or concurrently) because we dont keep any “driver is busy” state in memory or in the DB.
 """
 BUSY_DRIVERS: set[int] = set()
+ONLINE_USERS: dict[int, socket.socket] = {}
 ONLINE_DRIVERS: dict[int, socket.socket] = {}
 ACTIVE_REQUEST_DRIVERS: dict[str, set[int]] = defaultdict(set)
 _REQUEST_LAST_TOUCH: dict[str, float] =  {}
@@ -996,7 +997,7 @@ def _ride_rate(conn_state, payload, mid):
         cur.execute(
             "SELECT name, email, area, is_driver, rating_avg, rating_count "
             "FROM users WHERE user_id=?",
-            (rater_id,)
+            (ratee_id,)
         )
         updated_row = cur.fetchone()
 
@@ -1004,16 +1005,7 @@ def _ride_rate(conn_state, payload, mid):
         ratee_sock = None
 
         with STATE_LOCK:
-            # if ratee is driver
-            if ratee_id in ONLINE_DRIVERS:
-                ratee_sock = ONLINE_DRIVERS[ratee_id]
-
-            # if ratee is passenger
-            else:
-                for req_key, info in REQUEST_PASSENGERS.items():
-                    if info.get("user_id") == ratee_id:
-                        ratee_sock = info.get("sock")
-                        break
+            ratee_sock = ONLINE_USERS.get(ratee_id)
 
         if ratee_sock:
             _send_json_safe(ratee_sock, {
@@ -1134,17 +1126,16 @@ def handle_message(msg: dict, conn_state: dict):
             conn_state["user_id"] = uid  # bind this socket to the user
             user_preview = res["user"]
 
-            if user_preview.get("is_driver"):
-                with STATE_LOCK:
-                
+            with STATE_LOCK:
+                ONLINE_USERS[uid] = conn_state.get("sock")
+                if user_preview.get("is_driver"):
                     ONLINE_DRIVERS[uid] = conn_state.get("sock")
-
                     ip = conn_state["peer"][0] if conn_state.get("peer") else None
 
-
+                       
+            
                     
-            else:
-                with STATE_LOCK:
+                else:
                     ONLINE_DRIVERS.pop(uid, None)
                     DRIVER_PEERS.pop(uid, None)
 
@@ -1160,6 +1151,8 @@ def handle_message(msg: dict, conn_state: dict):
             _free_driver(uid)
 
         with STATE_LOCK:
+            if uid in ONLINE_USERS:
+                ONLINE_USERS.pop(uid, None)
             if uid in ONLINE_DRIVERS:
                 ONLINE_DRIVERS.pop(uid, None)
             if uid in DRIVER_PEERS:
@@ -1811,6 +1804,8 @@ def client_thread(conn: socket.socket, addr):
         try:
             uid = conn_state.get("user_id")
             with STATE_LOCK:
+                if uid in ONLINE_USERS and ONLINE_USERS.get(uid) is conn:
+                    ONLINE_USERS.pop(uid, None)
                 if uid in ONLINE_DRIVERS and ONLINE_DRIVERS.get(uid) is conn:
                     ONLINE_DRIVERS.pop(uid, None)
                 DRIVER_PEERS.pop(uid, None)
