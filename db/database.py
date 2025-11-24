@@ -66,6 +66,7 @@ cursor.execute(
         departure_time TEXT NOT NULL,
         lat            REAL,            -- passenger pin latitude
         lon            REAL,            -- passenger pin longitude
+        min_driver_rating REAL,
         status         TEXT NOT NULL,
         created_at     TEXT NOT NULL,
         FOREIGN KEY(user_id) REFERENCES users(user_id)

@@ -12,14 +12,14 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit
+    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
-from PyQt5.QtGui import QTextCursor, QPixmap
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject, QPointF
+from PyQt5.QtGui import QTextCursor, QPixmap, QIcon, QPolygonF, QColor, QPainter
 from gui.p2p_chat_endpoint import P2PChatEndpoint
 
 import requests
-from io import BytesIO
+
 
 
 
@@ -373,7 +373,7 @@ class JsonlSession(QObject):
 
             # Otherwise, treat as push / unsolicited
             t = msg.get("type")
-            if t in ("RIDE.MATCHED", "REQUEST.CLOSED", "DRIVER.BROADCAST"):
+            if t in ("RIDE.MATCHED", "REQUEST.CLOSED", "DRIVER.BROADCAST", "PROFILE.UPDATED"):
                 self.handle_push(msg)
                 continue
 
@@ -582,6 +582,8 @@ class RegisterForm(QWidget):
             self.show_error(msg)
         else:
             self.show_error(f"Unexpected response: {rtype}")
+        
+        
 
 # =============================================================================
 # Login form (uses shared session so the socket remains bound post-login)
@@ -676,6 +678,8 @@ class ProfileScreen(QWidget):
             "email": user_preview.get("email", ""),
             "area": user_preview.get("area", ""),
             "is_driver": bool(user_preview.get("is_driver", False)),
+            "rating_avg": user_preview.get("rating_avg", 0.0),
+            "rating_count": user_preview.get("rating_count", 0),
             
         }
 
@@ -719,6 +723,11 @@ class ProfileScreen(QWidget):
         form.addRow("Name:", self.in_name)
         form.addRow("Email:", self.in_email)
         form.addRow("Area:", self.in_area)
+        self.rating_label = QLabel("")
+        self.rating_label.setStyleSheet("font-size: 11pt; color: #e5e7eb;")
+        form.addRow("Rating:", self.rating_label)
+
+        self._update_rating_label()
         form.addRow("", self.chk_driver)
 
         self.err = QLabel(""); self.err.setWordWrap(True); self.err.setStyleSheet("color: red;"); self.err.setVisible(False)
@@ -828,6 +837,8 @@ class ProfileScreen(QWidget):
             self.show_ok("Profile saved.")
             if prev_driver != self.snapshot["is_driver"]:
                 self.driverModeChanged.emit(self.snapshot["is_driver"])
+            self._update_rating_label()
+  
         elif resp.get("type") == "ERROR":
             self.show_error(resp.get("payload", {}).get("message", "Failed to save profile."))
         else:
@@ -860,7 +871,28 @@ class ProfileScreen(QWidget):
         except Exception as e:
             print("Weather icon failed:", e)
 
+    def _update_rating_label(self):
+        avg = self.snapshot.get("rating_avg")
+        count = self.snapshot.get("rating_count")
 
+        if count is None or count == 0:
+            self.rating_label.setText("No ratings yet")
+            return
+
+        # format avg to 1 decimal place
+        avg_str = f"{avg:.1f}"
+        self.rating_label.setText(f"{avg_str} ★ ({count})")
+
+    def update_from_user_preview(self, preview: dict):
+        """
+        Update the profile fields when RIDE.RATE_RES returns new rating info.
+        """
+        self.snapshot["rating_avg"] = preview.get("rating_avg", self.snapshot.get("rating_avg"))
+        self.snapshot["rating_count"] = preview.get("rating_count", self.snapshot.get("rating_count"))
+
+
+        # Update the rating label
+        self._update_rating_label()
 # =============================================================================
 # ScheduleScreen
 # =============================================================================
@@ -1135,6 +1167,12 @@ class RideRequestPage(QWidget):
         self.cb_direction.addItems(["to_AUB", "from_AUB"])
         self.cb_direction.currentTextChanged.connect(self._update_direction_hints)
 
+        #rating
+        self.cb_min_driver_rating = QComboBox()
+        self.cb_min_driver_rating.addItem("Any driver rating", None)
+        for stars in range(1, 6):
+            self.cb_min_driver_rating.addItem(f"{stars}+ stars", float(stars))
+
 
         self.dt = QDateTimeEdit(QDateTime.currentDateTime())
         self.dt.setDisplayFormat("yyyy-MM-dd HH:mm")
@@ -1160,6 +1198,7 @@ class RideRequestPage(QWidget):
         form.addRow("Area:", self.in_area)
         form.addRow("", self.btn_pick_location)       # MAP BUTTON HERE
         form.addRow("Direction:", self.cb_direction)
+        form.addRow("Min driver rating:", self.cb_min_driver_rating)
         form.addRow("Departure Time:", self.dt)
 
         self.err = QLabel("")
@@ -1211,6 +1250,14 @@ class RideRequestPage(QWidget):
 
     def _iso_string(self) -> str:
         return self.dt.dateTime().toString("yyyy-MM-dd HH:mm")
+    
+    def _min_driver_rating(self):
+        idx = self.cb_min_driver_rating.currentIndex()
+        val = self.cb_min_driver_rating.itemData(idx)
+        if isinstance(val, (int, float)):
+            return float(val)
+        return None
+
 
     # =====================================================================
     # MAP HANDLERS
@@ -1275,6 +1322,10 @@ class RideRequestPage(QWidget):
             "lat": float(self.selected_lat),
             "lon": float(self.selected_lon),
         }
+
+        min_rating = self._min_driver_rating()
+        if min_rating is not None:
+            payload["min_driver_rating"] = min_rating
 
         req = {"type": "RIDE.REQUEST_REQ", "id": str(uuid.uuid4()), "payload": payload}
 
@@ -1395,6 +1446,13 @@ class DriverRidePage(QWidget):
         super().__init__(parent)
         self.session = session
 
+        # Rating filter: only show requests from passengers above threshold
+        self.cb_min_passenger_rating = QComboBox()
+        self.cb_min_passenger_rating.addItem("Any passenger rating", None)
+        for stars in range(1, 6):
+            self.cb_min_passenger_rating.addItem(f"{stars}+ stars", float(stars))
+
+
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Request ID", "Area", "Direction", "Departure Time"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -1418,6 +1476,9 @@ class DriverRidePage(QWidget):
         self.btn_accept.clicked.connect(self.on_accept_selected)
 
         top = QHBoxLayout()
+        top.addWidget(QLabel("Filter:"))
+        top.addWidget(self.cb_min_passenger_rating)
+        top.addSpacing(12)
         top.addWidget(self.btn_refresh)
         top.addWidget(self.btn_accept)
         top.addStretch(1)
@@ -1448,10 +1509,16 @@ class DriverRidePage(QWidget):
         self.err.setVisible(False)
 
     def refresh(self):
+
+        payload = {}
+        min_rating = self._min_passenger_rating()
+        if min_rating is not None:
+            payload["min_passenger_rating"] = min_rating
+
         req = {
             "type": "RIDE.LIST_REQ",
             "id": str(uuid.uuid4()),
-            "payload": {},
+            "payload": payload,
         }
         try:
             resp = self.session.request(req)
@@ -1541,6 +1608,14 @@ class DriverRidePage(QWidget):
     
     def add_broadcast(self, payload):
         self.refresh()
+    
+    def _min_passenger_rating(self):
+        idx = self.cb_min_passenger_rating.currentIndex()
+        val = self.cb_min_passenger_rating.itemData(idx)
+        if isinstance(val, (int, float)):
+            return float(val)
+        return None
+
 
 # =============================================================================
 # Passenger/Driver Ride Completion Page
@@ -1690,6 +1765,168 @@ class CurrentRidePage(QWidget):
             f"Driver matched!\nName: {name}\nCar: {model} ({color})\nPlate: {plate}"
         )
         self.complete_btn.hide()
+
+#============
+# rating
+# =============
+
+class StarRatingWidget(QWidget):
+    ratingChanged = pyqtSignal(int)
+
+    def __init__(self, parent=None, max_stars=5):
+        super().__init__(parent)
+        self.max_stars = max_stars
+        self._rating = 0
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self._pix_empty = self._make_star_pixmap(28, QColor("#4b5563"))   # grey
+        self._pix_filled = self._make_star_pixmap(28, QColor("#facc15"))  # yellow
+
+        self._buttons: list[QPushButton] = []
+        for i in range(max_stars):
+            btn = QPushButton()
+            btn.setCheckable(True)
+            btn.setFlat(True)
+            btn.setIcon(QIcon(self._pix_empty))
+            btn.setIconSize(self._pix_empty.size())
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedSize(36, 36)
+            btn.setStyleSheet("""
+                QPushButton {
+                    border: none;
+                    background-color: transparent;
+                    font-size: 22px;
+                    color: #4b5563;
+                }
+            """)
+            btn.clicked.connect(lambda _=False, idx=i: self.set_rating(idx + 1))
+            self._buttons.append(btn)
+            layout.addWidget(btn)
+
+        layout.addStretch(1)
+    
+    def _make_star_pixmap(self, size: int, color: QColor) -> QPixmap:
+        """Draw a 5-point star into a transparent pixmap."""
+        import math
+
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(color)
+        painter.setPen(Qt.NoPen)
+
+        cx = cy = size / 2.0
+        outer_r = size * 0.45
+        inner_r = size * 0.20
+
+        points = []
+        # 10 points: outer, inner, outer, inner...
+        for i in range(10):
+            angle = math.pi / 2 + i * math.pi / 5  # start from top
+            r = outer_r if i % 2 == 0 else inner_r
+            x = cx + r * math.cos(angle)
+            y = cy - r * math.sin(angle)
+            points.append(QPointF(x, y))
+
+        poly = QPolygonF(points)
+        painter.drawPolygon(poly)
+        painter.end()
+        return pm
+
+    def set_rating(self, value: int):
+        value = max(0, min(self.max_stars, int(value)))
+        self._rating = value
+        for i, btn in enumerate(self._buttons, start=1):
+            filled = i <= value
+            btn.setChecked(filled)
+            btn.setIcon(QIcon(self._pix_filled if filled else self._pix_empty))
+        self.ratingChanged.emit(self._rating)
+
+    def rating(self) -> int:
+        return self._rating
+
+
+class RatingDialog(QDialog):
+    def __init__(self, parent=None, title="Rate your ride", subtitle="How was your ride experience?"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+
+        self.setMinimumWidth(480)
+        self.setMaximumWidth(480)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #020617;
+            }
+            QLabel {
+                color: #e5e7eb;
+                background-color: transparent;
+            }
+            QPushButton {
+                background-color: #111827;
+                color: #e5e7eb;
+                border-radius: 10px;
+                padding: 6px 14px;
+                border: 1px solid #1f2937;
+            }
+            QPushButton:hover {
+                background-color: #1f2937;
+                border-color: #4b5563;
+            }
+            QPushButton:pressed {
+                background-color: #4f46e5;
+                border-color: #4f46e5;
+                color: #f9fafb;
+            }
+        """)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 16, 20, 16)
+        v.setSpacing(10)
+
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet("font-size: 14pt; font-weight: 600;")
+        v.addWidget(lbl_title)
+
+        lbl_sub = QLabel(subtitle)
+        lbl_sub.setWordWrap(True)
+        lbl_sub.setStyleSheet("color: #9ca3af;")
+        v.addWidget(lbl_sub)
+
+        self.star_widget = StarRatingWidget(self)
+        v.addWidget(self.star_widget)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        self.btn_skip = QPushButton("Skip")
+        self.btn_ok = QPushButton("Submit")
+
+        self.btn_skip.clicked.connect(self.reject)
+        self.btn_ok.clicked.connect(self._on_submit)
+
+        btn_row.addWidget(self.btn_skip)
+        btn_row.addWidget(self.btn_ok)
+        v.addLayout(btn_row)
+
+    def _on_submit(self):
+        if self.star_widget.rating() <= 0:
+            QMessageBox.information(self, "Rating", "Select at least one star or press Skip.")
+            return
+        self.accept()
+
+    def get_rating(self):
+        """Returns 1–5 or None if skipped."""
+        result = self.exec_()
+        if result == QDialog.Accepted:
+            return self.star_widget.rating()
+        return None
 
 
 # =============================================================================
@@ -1997,12 +2234,13 @@ class MainWindow(QMainWindow):
         self.p2p_sock = None
         self.p2p_thread = None
 
-        if self.chat_endpoint is not None:
+        ep = getattr(self, "chat_endpoint", None)
+        self.chat_endpoint = None  # remove reference first
+        if ep:
             try:
-                self.chat_endpoint.close()
-            except Exception:
+                ep.close()
+            except:
                 pass
-            self.chat_endpoint = None
 
 
     def on_p2p_message(self, text: str):
@@ -2018,7 +2256,6 @@ class MainWindow(QMainWindow):
         if getattr(self, "chat_endpoint", None) is not None:
             self.chat_endpoint = None
 
-    
     
     def on_push_received(self, msg: dict):
         t = msg.get("type")
@@ -2060,20 +2297,40 @@ class MainWindow(QMainWindow):
                         self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
                         self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
 
-                        #self.current_ride_page.chat_box.append(f"<i>Connected to driver for chat</i>")
-
                 else:
                     if self.current_ride_page is not None:
-                        self.current_ride_page.append_bubble(f"<i>Driver did not provide chat info</i>", outgoing = False)
-        
-        
-        
+                        self.current_ride_page.append_bubble(
+                            f"<i>Driver did not provide chat info</i>", outgoing=False
+                        )
+
         elif t == "REQUEST.CLOSED":
             self.on_request_closed(msg)
-        
+
         elif t == "DRIVER.BROADCAST":
             self.on_driver_broadcast(msg)
+
+        elif t == "PROFILE.UPDATED":
+            # DEBUG: see the push on BOTH sides
+            print("PROFILE.UPDATED push:", payload)
+
+            # 1) Update the cached preview of the *logged in user*
+            if payload:
+                self.user_preview["rating_avg"] = payload.get(
+                    "rating_avg",
+                    self.user_preview.get("rating_avg"),
+                )
+                self.user_preview["rating_count"] = payload.get(
+                    "rating_count",
+                    self.user_preview.get("rating_count"),
+                )
+
+            # 2) Refresh profile screen if it has been constructed
+            if isinstance(self.profile_page, ProfileScreen):
+                self.profile_page.update_from_user_preview(self.user_preview)
+
     
+    
+        
     def on_ride_matched(self, msg: dict):
         payload = msg.get("payload", {})
         if isinstance(self.ride_page, RideRequestPage):
@@ -2082,14 +2339,20 @@ class MainWindow(QMainWindow):
     def on_request_closed(self, msg: dict):
         """Called when server notifies that a ride was closed"""
         payload = msg.get("payload", {})
+        reason = payload.get("reason")
+
         if isinstance(self.ride_page, DriverRidePage):
             self.ride_page.handle_request_closed(payload)
 
         if isinstance(self.ride_page, RideRequestPage):
         # reset the passenger's request form state
             self.ride_page.set_idle_state()
+        
+        if reason == "completed":
+            self.show_rating_dialog()
 
         try:
+            self.return_to_idle_state()
             self.btn_current.setEnabled(False)
             self.btn_ride.setEnabled(True)
             self.btn_ride.setChecked(True)
@@ -2104,13 +2367,76 @@ class MainWindow(QMainWindow):
         if isinstance(self.ride_page, DriverRidePage):
             self.ride_page.add_broadcast(msg.get("payload", {}))
     
+    def show_rating_dialog(self):
+        """
+        Show star rating dialog for the current ride (if any)
+        and send RIDE.RATE_REQ to the server.
+        """
+        req_id = self.active_request_id
+        if not req_id:
+            return
+
+        role = "driver" if self.user_preview.get("is_driver") else "passenger"
+        if role == "driver":
+            title = "Rate your passenger"
+            subtitle = "Please rate your passenger before leaving this ride."
+        else:
+            title = "Rate your driver"
+            subtitle = "Please rate your driver before leaving this ride."
+
+        dlg = RatingDialog(self, title=title, subtitle=subtitle)
+        rating = dlg.get_rating()
+        if rating is None:
+            # user skipped
+            return
+
+        try:
+            res = self.session.request({
+                "type": "RIDE.RATE_REQ",
+                "payload": {
+                    "request_id": req_id,
+                    "rating": int(rating),
+                },
+            })
+        except Exception as e:
+            QMessageBox.warning(self, "Rating failed", f"Network error while sending rating: {e}")
+            return
+
+        rtype = res.get("type")
+        payload = res.get("payload", {})
+
+        if rtype == "RIDE.RATE_RES":
+            QMessageBox.information(self, "Thank you", "Your rating has been recorded.")
+        elif rtype == "ERROR":
+            msg = payload.get("message", "Failed to save rating.")
+            QMessageBox.warning(self, "Rating failed", f"Server error: {msg}")
+        else:
+            QMessageBox.warning(self, "Rating failed", f"Unexpected response: {rtype}")
+ 
+
     def complete_ride(self):
         # DRIVER ONLY
+        if not self.active_request_id:
+            QMessageBox.warning(self, "No active ride", "No active ride to rate")
+            return
+        
         payload = {"request_id": self.active_request_id}   # store this on match
-        res = self.session.request({"type": "RIDE.COMPLETE_REQ", "payload": payload})
+        try:
+            res = self.session.request({"type": "RIDE.COMPLETE_REQ", "payload": payload})
+        except Exception as e:
+            QMessageBox.warning(self, "Ride Completed", f"Network: {e}")
+            return
+        
         if res["type"] == "RIDE.COMPLETE_RES":
-            QMessageBox.information(self, "Ride Completed", "Ride successfully completed.")
+            self.show_rating_dialog()
             self.return_to_idle_state()
+        
+        elif res["type"] == "ERROR":
+            p = res.get("payload", {})
+            QMessageBox.warning(self, "Ride Completed", p.get("message", "Failed to complete ride."))
+        else:
+            QMessageBox.warning(self, "Ride Completed", f"Unexpected response: {res.get('type')}")
+            
     
     def return_to_idle_state(self):
         # driver or passenger
@@ -2131,12 +2457,13 @@ class MainWindow(QMainWindow):
         self.current_ride_page.chat_box.clear()
         self.current_ride_page.info_label.setText("No active ride")
 
-        if self.chat_endpoint is not None:
+        ep = getattr(self, "chat_endpoint", None)
+        self.chat_endpoint = None  # remove reference first
+        if ep:
             try:
-                self.chat_endpoint.close()
-            except Exception:
+                ep.close()
+            except:
                 pass
-            self.chat_endpoint = None
 
 
     def on_driver_ride_accepted(self, request_id: str, payload: dict):
