@@ -1476,6 +1476,12 @@ def handle_message(msg: dict, conn_state: dict):
                 row = cur2.fetchone()
                 driver_rating_avg = float(row[0]) if row and row[0] is not None else 0.0
 
+                # --- B) Check driver's filter for min_passenger_rating ---
+                if min_passenger_rating is not None:
+                    passenger_rating = float(rating_avg) if rating_avg is not None else 0.0
+                    if passenger_rating < min_passenger_rating:
+                        continue
+
                 # Fetch passenger's required minimum rating for drivers
                 cur3 = sqlite3.connect(DB_PATH).cursor()
                 cur3.execute("SELECT min_driver_rating FROM ride_req WHERE request_id=?", (req_id_int,))
