@@ -708,11 +708,14 @@ def _driver_has_active_match(driver_id: int) -> bool:
 
 def _ride_accept(conn_state, payload, mid):
     driver_id, err = require_logged_in(conn_state, mid)
+
     if err:
         return err
     _ok, derr = require_driver(conn_state, mid)
     if derr:
         return derr
+    
+    passenger_preview = None
 
     req_s = (payload or {}).get("request_id")
     req_id_int = _reqid_to_int(req_s)
@@ -797,6 +800,17 @@ def _ride_accept(conn_state, payload, mid):
             conn.close()
             return {"type":"ERROR","id":mid,"payload":{
                 "code":"REQUEST_CLOSED","message":"request not open"}}
+        
+        # fetch passenger preview (for the driver UI/chat)
+        cur.execute(
+            "SELECT user_id, name, username, password, email, is_driver, area, "
+            "rating_sum, rating_avg, rating_count "
+            "FROM users WHERE user_id=?",
+            (passenger_id,),
+        )
+        prow = cur.fetchone()
+        if prow:
+            passenger_preview = _user_preview_from_row(prow)
 
         conn.commit()
         conn.close()
@@ -850,9 +864,17 @@ def _ride_accept(conn_state, payload, mid):
         _REQUEST_LAST_TOUCH.pop(f"req_{req_id_int}", None)
         #REQUEST_PASSENGERS.pop(f"req_{req_id_int}", None)
 
-    return {"type":"RIDE.ACCEPT_RES", "id":mid, "payload":{
-        "request_id": f"req_{req_id_int}"
-    }}
+    res_payload = {
+        "request_id": f"req_{req_id_int}",
+    }
+    if passenger_preview:
+        res_payload["passenger_info"] = passenger_preview
+
+    return {
+        "type": "RIDE.ACCEPT_RES",
+        "id": mid,
+        "payload": res_payload,
+    }
 
 def _mark_driver_sees_request(request_id: str, driver_id: int):
     """Record that this driver is eligible to accept this request."""
