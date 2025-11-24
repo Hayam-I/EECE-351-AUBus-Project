@@ -22,8 +22,7 @@ client/      → PyQt5 GUI and client logic
 server/      → Server-side logic and database integration
 protocol/    → Message formatting, encoding/decoding (JSON)
 db/          → SQLite database and schema
-tests/       → Unit and integration tests
-assets/      → Icons, UI files, or reference media
+tests/       → Unit and integration tests + seeding scripts for fast user input into db
 
 ````
 
@@ -46,18 +45,22 @@ pip install -r requirements.txt
 1. Start the server:
 
    ```bash
-   cd server
-   python server_main.py
+   python server/main.py --host 0.0.0.0 --port 6000 --log DEBUG
    ```
 
 2. Start the client:
 
    ```bash
-   cd client
-   python client_main.py
+   python -m gui.main
    ```
 
 3. Use the GUI to register, log in, and send ride requests.
+4. To create db:
+   ```bash
+   python db/database.py
+   ```
+   
+   
 
 
 ---
@@ -67,6 +70,7 @@ pip install -r requirements.txt
 Hayam Itani (hoi01@mail.aub.edu)
 Mohammad Jaffal (mgj08@mail.aub.edu)
 Sarah Bayrakdar (sib10@mail.aub.edu)
+
 
 
 
