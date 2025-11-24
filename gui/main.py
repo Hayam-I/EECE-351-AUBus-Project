@@ -582,6 +582,8 @@ class RegisterForm(QWidget):
             self.show_error(msg)
         else:
             self.show_error(f"Unexpected response: {rtype}")
+        
+        
 
 # =============================================================================
 # Login form (uses shared session so the socket remains bound post-login)
@@ -2255,7 +2257,6 @@ class MainWindow(QMainWindow):
             self.chat_endpoint = None
 
     
-    
     def on_push_received(self, msg: dict):
         t = msg.get("type")
         payload = msg.get("payload", {})
@@ -2296,33 +2297,40 @@ class MainWindow(QMainWindow):
                         self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
                         self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
 
-                        #self.current_ride_page.chat_box.append(f"<i>Connected to driver for chat</i>")
-
                 else:
                     if self.current_ride_page is not None:
-                        self.current_ride_page.append_bubble(f"<i>Driver did not provide chat info</i>", outgoing = False)
-        
-        
-        
+                        self.current_ride_page.append_bubble(
+                            f"<i>Driver did not provide chat info</i>", outgoing=False
+                        )
+
         elif t == "REQUEST.CLOSED":
             self.on_request_closed(msg)
-        
+
         elif t == "DRIVER.BROADCAST":
             self.on_driver_broadcast(msg)
-        
-        elif t == "PROFILE.UPDATED":
-            # Update cached preview
-            if payload:
-                if "rating_avg" in payload:
-                    self.user_preview["rating_avg"] = payload["rating_avg"]
-                if "rating_count" in payload:
-                    self.user_preview["rating_count"] = payload["rating_count"]
 
-            # Refresh profile screen if visible
+        elif t == "PROFILE.UPDATED":
+            # DEBUG: see the push on BOTH sides
+            print("PROFILE.UPDATED push:", payload)
+
+            # 1) Update the cached preview of the *logged in user*
+            if payload:
+                self.user_preview["rating_avg"] = payload.get(
+                    "rating_avg",
+                    self.user_preview.get("rating_avg"),
+                )
+                self.user_preview["rating_count"] = payload.get(
+                    "rating_count",
+                    self.user_preview.get("rating_count"),
+                )
+
+            # 2) Refresh profile screen if it has been constructed
             if isinstance(self.profile_page, ProfileScreen):
                 self.profile_page.update_from_user_preview(self.user_preview)
 
     
+    
+        
     def on_ride_matched(self, msg: dict):
         payload = msg.get("payload", {})
         if isinstance(self.ride_page, RideRequestPage):
