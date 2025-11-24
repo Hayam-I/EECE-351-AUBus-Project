@@ -29,9 +29,6 @@ def excepthook(exc_type, exc, tb):
     QMessageBox.critical(None, "Unhandled Error", f"{exc_type.__name__}: {exc}")
 sys.excepthook = excepthook
 
-def set_visible(widget, visible: bool):
-    widget.setVisible(visible)
-
 # ===== transport config =====
 HOST = "127.0.0.1"
 PORT = 6000
@@ -57,505 +54,205 @@ def title_page(text):
     return w
 
 #==== design =====
-DARK_STYLESHEET = """
-/* ===== Global ===== */
-QMainWindow#MainWindow, QWidget {
-    background-color: #020617;  /* dark navy */
-    color: #e5e7eb;
-    font-family: "Segoe UI", system-ui, sans-serif;
-    font-size: 10pt;
-}
-
-/* Labels */
-QLabel {
-    color: #e5e7eb;
-    background-color: transparent;
-    border: none;
-}
-
-QLabel#page_title {
-    font-size: 18pt;
-    font-weight: 600;
-    color: #e5e7eb;
-}
-
-/* Error / success tint by inline style */
-QLabel[style*="color: red"] {
-    color: #f97373;
-}
-QLabel[style*="#0a7a0a"], QLabel[style*="color: #0a7a0a"] {
-    color: #4ade80;
-}
-
-/* ===== Sidebar ===== */
-QWidget#SideBar {
-    background-color: #020617;
-    border-right: 1px solid #1f2937;
-}
-
-QWidget#SideBar QPushButton {
-    background-color: transparent;
-    border: none;
-    color: #9ca3af;
-    padding: 8px 14px;
-    text-align: left;
-    border-radius: 10px;
-}
-
-QWidget#SideBar QPushButton:hover {
-    background-color: rgba(99,102,241,0.18);
-    color: #e5e7eb;
-}
-
-QWidget#SideBar QPushButton:checked {
-    background-color: #4f46e5;
-    color: #f9fafb;
-}
-
-/* ===== Auth / cards ===== */
-QWidget#login_card,
-QWidget#register_card {
-    background-color: qradialgradient(
-        cx:0.5, cy:0.0, radius:1.4,
-        fx:0.5, fy:0.0,
-        stop:0  rgba(129,140,248,0.22),
-        stop:0.4 rgba(24,31,81,0.96),
-        stop:1  #020617
-    );
-    border-radius: 20px;
-    border: 1px solid rgba(148,163,184,0.45);
-}
-
-QStackedWidget {
-    background-color: #020617;
-    border-radius: 18px;
-}
-
-/* ===== Inputs ===== */
-QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
-    background-color: rgba(255,255,255,0.04);
-    border: 1px solid rgba(148,163,184,0.25);
-    border-radius: 8px;
-    padding: 6px 10px;
-    color: #e5e7eb;
-    selection-background-color: #4f46e5;
-    selection-color: #f9fafb;
-}
-
-QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
-    border: 1px solid #6366f1;
-    background-color: rgba(255,255,255,0.07);
-}
-
-QComboBox QAbstractItemView {
-    background-color: #020617;
-    border: 1px solid #1f2937;
-    selection-background-color: #4f46e5;
-    selection-color: #f9fafb;
-}
-
-/* Profile fields – dark (by id) */
-QLineEdit#profileField,
-QLineEdit#profileField:disabled,
-QLineEdit#profileField:read-only {
-    background-color: rgba(255,255,255,0.12);
-    border: 1px solid rgba(148,163,184,0.75);
-    color: #f9fafb;
-    border-radius: 8px;
-    padding: 6px 10px;
-}
-
-QLineEdit#profileField:focus {
-    border: 1px solid #6366f1;
-    background-color: rgba(255,255,255,0.18);
-}
-
-/* ===== Buttons ===== */
-QPushButton {
-    background-color: #111827;
-    color: #e5e7eb;
-    border-radius: 10px;
-    padding: 6px 14px;
-    border: 1px solid #1f2937;
-}
-
-QPushButton:hover {
-    background-color: #1f2937;
-    border-color: #4b5563;
-}
-
-QPushButton:pressed {
-    background-color: #4f46e5;
-    border-color: #4f46e5;
-    color: #f9fafb;
-}
-
-QPushButton:disabled {
-    background-color: #020617;
-    color: #4b5563;
-    border-color: #111827;
-}
-
-/* ===== Tables ===== */
-QTableWidget {
-    background-color: #020617;
-    border: 1px solid #111827;
-    border-radius: 14px;
-    gridline-color: #111827;
-    selection-background-color: rgba(129,140,248,0.25);
-    selection-color: #f9fafb;
-}
-
-QHeaderView::section {
-    background-color: #020617;
-    color: #9ca3af;
-    padding: 6px 8px;
-    border: none;
-    border-bottom: 1px solid #111827;
-}
-
-QTableCornerButton::section {
-    background-color: #020617;
-    border: none;
-}
-
-/* ===== Tabs ===== */
-QTabWidget::pane {
-    border: 1px solid #111827;
-    border-radius: 14px;
-    background-color: #020617;
-}
-
-QTabBar::tab {
-    background-color: transparent;
-    color: #9ca3af;
-    padding: 6px 16px;
-    border-radius: 10px;
-    margin: 4px;
-}
-
-QTabBar::tab:selected {
-    background-color: #4f46e5;
-    color: #f9fafb;
-}
-
-QTabBar::tab:hover {
-    background-color: rgba(79,70,229,0.25);
-    color: #e5e7eb;
-}
-
-/* ===== Scrollbars ===== */
-QScrollBar:vertical, QScrollBar:horizontal {
-    background: #020617;
-    border-radius: 4px;
-    width: 10px;
-    height: 10px;
-    margin: 2px;
-}
-
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-    background: #111827;
-    border-radius: 4px;
-}
-
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-    background: #4b5563;
-}
-
-QScrollBar::add-line, QScrollBar::sub-line {
-    width: 0;
-    height: 0;
-    background: transparent;
-}
-
-/* ===== Chat box ===== */
-QTextEdit {
-    background-color: transparent;
-    color: inherit;
-    border: none;
-}
-
-/* Chat input */
-QLineEdit[objectName="chatInput"] {
-    background-color: rgba(15,23,42,0.9);
-    border-radius: 999px;
-    padding: 8px 12px;
-    border: 1px solid rgba(148,163,184,0.35);
-}
-
-/* ===== Checkboxes (modern, unified) ===== */
-QCheckBox {
-    spacing: 6px;
-}
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-    border: 1px solid #4b5563;
-    background-color: #020617;
-}
-QCheckBox::indicator:hover {
-    border-color: #6366f1;
-}
-QCheckBox::indicator:checked {
-    background-color: #4f46e5;
-    border-color: #4f46e5;
-}
-"""
-
-LIGHT_STYLESHEET = """
-/* ===== Global ===== */
-QMainWindow#MainWindow, QWidget {
-    background-color: #FFF5E6;  /* creamy */
-    color: #3A2E25;
-    font-family: "Segoe UI", system-ui, sans-serif;
-    font-size: 10pt;
-}
-
-/* Labels */
-QLabel {
-    color: #3A2E25;
-    background-color: transparent;
-    border: none;
-}
-
-QLabel#page_title {
-    font-size: 18pt;
-    font-weight: 600;
-    color: #3A2E25;
-}
-
-/* Error / success tint */
-QLabel[style*="color: red"] {
-    color: #b91c1c;
-}
-QLabel[style*="#0a7a0a"], QLabel[style*="color: #0a7a0a"] {
-    color: #166534;
-}
-
-/* ===== Sidebar ===== */
-QWidget#SideBar {
-    background-color: #F4E3CC;
-    border-right: 1px solid #D2BFA5;
-}
-
-QWidget#SideBar QPushButton {
-    background-color: transparent;
-    border: none;
-    color: #7B5A3A;
-    padding: 8px 14px;
-    text-align: left;
-    border-radius: 10px;
-}
-
-QWidget#SideBar QPushButton:hover {
-    background-color: rgba(173,133,88,0.15);
-    color: #3A2E25;
-}
-
-QWidget#SideBar QPushButton:checked {
-    background-color: #C49A6C;
-    color: #FFF9F0;
-}
-
-/* ===== Auth / cards ===== */
-QWidget#login_card,
-QWidget#register_card {
-    background-color: #FFF5E6;
-    border-radius: 20px;
-    border: 1px solid #D2BFA5;
-}
-
-QStackedWidget {
-    background-color: #FFF5E6;
-    border-radius: 18px;
-}
-
-/* ===== Inputs ===== */
-QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
-    background-color: #FFF9F0;
-    border: 1px solid #D3C3AE;
-    border-radius: 8px;
-    padding: 6px 10px;
-    color: #3A2E25;
-    selection-background-color: #C49A6C;
-    selection-color: #FFF9F0;
-}
-
-QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
-    border: 1px solid #C49A6C;
-    background-color: #FFF2DE;
-}
-
-QComboBox QAbstractItemView {
-    background-color: #FFF5E6;
-    border: 1px solid #D2BFA5;
-    selection-background-color: #C49A6C;
-    selection-color: #FFF9F0;
-}
-
-/* Profile fields – light (by id) */
-QLineEdit#profileField,
-QLineEdit#profileField:disabled,
-QLineEdit#profileField:read-only {
-    background-color: #FFF3E3;
-    border: 1px solid #D3C3AE;
-    color: #3A2E25;
-    border-radius: 8px;
-    padding: 6px 10px;
-}
-
-QLineEdit#profileField:focus {
-    border: 1px solid #C49A6C;
-    background-color: #FFEBD2;
-}
-
-/* ===== Buttons ===== */
-QPushButton {
-    background-color: #E8D4BC;
-    color: #3A2E25;
-    border-radius: 10px;
-    padding: 6px 14px;
-    border: 1px solid #D2BFA5;
-}
-
-QPushButton:hover {
-    background-color: #DEC6A7;
-    border-color: #C49A6C;
-}
-
-QPushButton:pressed {
-    background-color: #C49A6C;
-    border-color: #C49A6C;
-    color: #FFF9F0;
-}
-
-QPushButton:disabled {
-    background-color: #F2E3CF;
-    color: #B09A82;
-    border-color: #E2D2BF;
-}
-
-/* ===== Tables ===== */
-QTableWidget {
-    background-color: #FFF9F0;
-    border: 1px solid #D2BFA5;
-    border-radius: 14px;
-    gridline-color: #E2D2BF;
-    selection-background-color: rgba(196,154,108,0.25);
-    selection-color: #3A2E25;
-}
-
-QHeaderView::section {
-    background-color: #F4E3CC;
-    color: #7B5A3A;
-    padding: 6px 8px;
-    border: none;
-    border-bottom: 1px solid #D2BFA5;
-}
-
-QTableCornerButton::section {
-    background-color: #F4E3CC;
-    border: none;
-}
-
-/* ===== Tabs ===== */
-QTabWidget::pane {
-    border: 1px solid #D2BFA5;
-    border-radius: 14px;
-    background-color: #FFF9F0;
-}
-
-QTabBar::tab {
-    background-color: transparent;
-    color: #7B5A3A;
-    padding: 6px 16px;
-    border-radius: 10px;
-    margin: 4px;
-}
-
-QTabBar::tab:selected {
-    background-color: #C49A6C;
-    color: #FFF9F0;
-}
-
-QTabBar::tab:hover {
-    background-color: rgba(196,154,108,0.25);
-    color: #3A2E25;
-}
-
-/* ===== Scrollbars ===== */
-QScrollBar:vertical, QScrollBar:horizontal {
-    background: #F4E3CC;
-    border-radius: 4px;
-    width: 10px;
-    height: 10px;
-    margin: 2px;
-}
-
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-    background: #D2BFA5;
-    border-radius: 4px;
-}
-
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-    background: #C49A6C;
-}
-
-QScrollBar::add-line, QScrollBar::sub-line {
-    width: 0;
-    height: 0;
-    background: transparent;
-}
-
-/* ===== Chat box ===== */
-QTextEdit {
-    background-color: transparent;
-    color: inherit;
-    border: none;
-}
-
-/* Chat input */
-QLineEdit[objectName="chatInput"] {
-    background-color: #FFF3E3;
-    border-radius: 999px;
-    padding: 8px 12px;
-    border: 1px solid #D3C3AE;
-    color: #3A2E25;
-}
-
-/* ===== Checkboxes (same style family as dark) ===== */
-QCheckBox {
-    spacing: 6px;
-}
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-    border: 1px solid #B89C7A;
-    background-color: #FFF9F0;
-}
-QCheckBox::indicator:hover {
-    border-color: #C49A6C;
-}
-QCheckBox::indicator:checked {
-    background-color: #C49A6C;
-    border-color: #C49A6C;
-}
-"""
-
-
-def apply_theme(mode: str = "dark"):
-    app = QApplication.instance()
-    if app is None:
-        return
-    app.setStyle("Fusion")
-    if mode == "dark":
-        app.setStyleSheet(DARK_STYLESHEET)
-    else:
-        app.setStyleSheet(LIGHT_STYLESHEET)
-
-
+def apply_bento_theme(app: QApplication):
+    app.setStyle("Fusion")  # more modern base style
+
+    app.setStyleSheet("""
+    /* ====== Global background ====== */
+    QMainWindow#MainWindow, QWidget {
+        background-color: #020617; /* very dark navy */
+        color: #e5e7eb;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        font-size: 10pt;
+    }
+
+    /* ====== Sidebar ====== */
+    QWidget#SideBar {
+        background-color: #020617;
+        border-right: 1px solid #1f2937;
+    }
+
+    QWidget#SideBar QPushButton {
+        background-color: transparent;
+        border: none;
+        color: #9ca3af;
+        padding: 8px 14px;
+        text-align: left;
+        border-radius: 10px;
+    }
+
+    QWidget#SideBar QPushButton:hover {
+        background-color: rgba(99,102,241,0.18); /* soft indigo */
+        color: #e5e7eb;
+    }
+
+    QWidget#SideBar QPushButton:checked {
+        background-color: #4f46e5; /* primary indigo */
+        color: #f9fafb;
+    }
+
+    /* ====== Cards / panels ====== */
+    QStackedWidget, QWidget#login_card, QWidget#register_card {
+        background-color: #020617;
+        border-radius: 18px;
+    }
+
+    QWidget#login_card, QWidget#register_card {
+        border: 1px solid rgba(148,163,184,0.35);
+        background-color: qlineargradient(
+            x1:0, y1:0, x2:1, y2:1,
+            stop:0 #020617,
+            stop:1 #020617
+        );
+    }
+    
+    QLabel {
+        color: #e5e7eb;
+        background-color: transparent;   /* <<< this removes the black box */
+        border: none;
+    }
+
+    QLabel#page_title {
+        font-size: 18pt;
+        font-weight: 600;
+        color: #e5e7eb;
+    }
+
+    /* ====== Inputs ====== */
+    QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
+        background-color: rgba(255,255,255,0.04);
+        border: 1px solid rgba(148,163,184,0.25); 
+        border-radius: 8px;
+        padding: 6px 10px;
+        color: #e5e7eb;
+        selection-background-color: #4f46e5;
+        selection-color: #f9fafb;
+    }
+                      
+
+    QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
+        border: 1px solid #6366f1;
+        background-color: rgba(255,255,255,0.07);
+    }
+
+    QComboBox QAbstractItemView {
+        background-color: #020617;
+        border: 1px solid #1f2937;
+        selection-background-color: #4f46e5;
+        selection-color: #f9fafb;
+    }
+
+    /* ====== Primary / secondary buttons ====== */
+    QPushButton {
+        background-color: #111827;
+        color: #e5e7eb;
+        border-radius: 10px;
+        padding: 6px 14px;
+        border: 1px solid #1f2937;
+    }
+
+    QPushButton:hover {
+        background-color: #1f2937;
+        border-color: #4b5563;
+    }
+
+    QPushButton:pressed {
+        background-color: #4f46e5;
+        border-color: #4f46e5;
+        color: #f9fafb;
+    }
+
+    QPushButton:disabled {
+        background-color: #020617;
+        color: #4b5563;
+        border-color: #111827;
+    }
+
+    /* ====== Tables ====== */
+    QTableWidget {
+        background-color: #020617;
+        alternate-background-color: #020617;
+        border: 1px solid #111827;
+        border-radius: 14px;
+        gridline-color: #111827;
+        selection-background-color: rgba(129,140,248,0.25);
+        selection-color: #f9fafb;
+    }
+
+    QHeaderView::section {
+        background-color: #020617;
+        color: #9ca3af;
+        padding: 6px 8px;
+        border: none;
+        border-bottom: 1px solid #111827;
+    }
+
+    QTableCornerButton::section {
+        background-color: #020617;
+        border: none;
+    }
+
+    /* Scrollbars (subtle) */
+    QScrollBar:vertical, QScrollBar:horizontal {
+        background: #020617;
+        border-radius: 4px;
+        width: 10px;
+        height: 10px;
+        margin: 2px;
+    }
+
+    QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+        background: #111827;
+        border-radius: 4px;
+    }
+
+    QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+        background: #4b5563;
+    }
+
+    QScrollBar::add-line, QScrollBar::sub-line {
+        width: 0;
+        height: 0;
+        background: transparent;
+    }
+
+    /* Status labels */
+    QLabel {
+        color: #e5e7eb;
+    }
+
+    QLabel[style*="color: red"] {
+        color: #f97373;
+    }
+
+    QLabel[style*="#0a7a0a"] {
+        color: #4ade80;
+    }
+
+    QTabWidget::pane {
+        border: 1px solid #111827;
+        border-radius: 14px;
+        background-color: #020617;
+    }
+
+    QTabBar::tab {
+        background-color: transparent;
+        color: #9ca3af;
+        padding: 6px 16px;
+        border-radius: 10px;
+        margin: 4px;
+    }
+
+    QTabBar::tab:selected {
+        background-color: #4f46e5;
+        color: #f9fafb;
+    }
+
+    QTabBar::tab:hover {
+        background-color: rgba(79,70,229,0.25);
+        color: #e5e7eb;
+    }
+    """)
 
 #====weather helpers ======
 
@@ -734,7 +431,19 @@ class RegisterForm(QWidget):
 
         card = QWidget()
         card.setObjectName("register_card")
-    
+        card.setStyleSheet("""
+            QWidget#register_card {
+                background-color: qradialgradient(
+                    cx:0.1, cy:0.0, radius:1.4,
+                    fx:0.0, fy:0.0,
+                    stop:0  rgba(129,140,248,0.25),
+                    stop:0.4 rgba(24,31,81,0.90),
+                    stop:1  #020617
+                );
+                border-radius: 20px;
+                border: 1px solid rgba(148,163,184,0.45);
+            }
+        """)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(30, 20, 30, 20)
         lay.setSpacing(15)
@@ -904,7 +613,19 @@ class LoginForm(QWidget):
 
         card = QWidget()
         card.setObjectName("login_card")
-        
+        card.setStyleSheet("""
+            QWidget#login_card {
+                background-color: qradialgradient(
+                    cx:0.9, cy:0.0, radius:1.4,
+                    fx:1.0, fy:0.0,
+                    stop:0  rgba(236,72,153,0.25),
+                    stop:0.4 rgba(24,31,81,0.90),
+                    stop:1  #020617
+                );
+                border-radius: 20px;
+                border: 1px solid rgba(148,163,184,0.45);
+            }
+        """)
         lay = QVBoxLayout(card); lay.setContentsMargins(30,20,30,20); lay.setSpacing(15)
         lay.addLayout(form); lay.addWidget(self.err); lay.addSpacing(8); lay.addWidget(self.btn_login,0,Qt.AlignHCenter)
 
@@ -952,20 +673,16 @@ class ProfileScreen(QWidget):
         super().__init__(parent)
         self.session = session
 
-        # snapshot from login + optional vehicle info (if you later add it to PROFILE.GET)
-        veh = user_preview.get("vehicle") or {}
         self.snapshot = {
-            "name":       user_preview.get("name", ""),
-            "email":      user_preview.get("email", ""),
-            "area":       user_preview.get("area", ""),
-            "is_driver":  bool(user_preview.get("is_driver", False)),
-            "vehicle_make":  veh.get("make", "") if isinstance(veh, dict) else "",
-            "vehicle_model": veh.get("model", "") if isinstance(veh, dict) else "",
-            "vehicle_color": veh.get("color", "") if isinstance(veh, dict) else "",
-            "vehicle_plate": veh.get("plate", "") if isinstance(veh, dict) else "",
+            "name": user_preview.get("name", ""),
+            "email": user_preview.get("email", ""),
+            "area": user_preview.get("area", ""),
+            "is_driver": bool(user_preview.get("is_driver", False)),
+            "rating_avg": user_preview.get("rating_avg", 0.0),
+            "rating_count": user_preview.get("rating_count", 0),
+            
         }
 
-        # ---- basic fields ----
         self.in_name = QLineEdit(self.snapshot["name"])
         self.in_name.setObjectName("profileField")
         self.in_email = QLineEdit(self.snapshot["email"])
@@ -975,53 +692,34 @@ class ProfileScreen(QWidget):
         self.chk_driver = QCheckBox("Driver Mode")
         self.chk_driver.setChecked(self.snapshot["is_driver"])
 
-        # ---- vehicle fields (used only when driver) ----
-        self.in_vehicle_make  = QLineEdit(self.snapshot["vehicle_make"])
-        self.in_vehicle_model = QLineEdit(self.snapshot["vehicle_model"])
-        self.in_vehicle_color = QLineEdit(self.snapshot["vehicle_color"])
-        self.in_vehicle_plate = QLineEdit(self.snapshot["vehicle_plate"])
-
-        self.in_vehicle_make.setPlaceholderText("e.g. Toyota")
-        self.in_vehicle_model.setPlaceholderText("e.g. Corolla")
-        self.in_vehicle_color.setPlaceholderText("e.g. White")
-        self.in_vehicle_plate.setPlaceholderText("e.g. B 123456")
-
-        # Stronger style for profile fields (reuse for vehicle fields)
+        # Stronger style just for the 3 profile fields bc i cant figure out where you put the styling for them joe T_T
         profile_field_css = """
         QLineEdit#profileField,
         QLineEdit#profileField:disabled,
         QLineEdit#profileField:read-only {
-            border-radius: 8px;
-            padding: 6px 10px;
+            background-color: rgba(255,255,255,0.14);   /* brighter background */
+            border: 1px solid rgba(148,163,184,0.75);   /* stronger border */
+            color: #f9fafb;                              /* bright text */
         }
+
         QLineEdit#profileField:focus {
-            border-width: 1px;
+            border: 1px solid #6366f1;
+            background-color: rgba(255,255,255,0.18);
         }
         """
 
-        # apply style
         self.in_name.setStyleSheet(profile_field_css)
         self.in_email.setStyleSheet(profile_field_css)
         self.in_area.setStyleSheet(profile_field_css)
 
-        for w in (self.in_vehicle_make, self.in_vehicle_model, self.in_vehicle_color, self.in_vehicle_plate):
-            w.setObjectName("profileField")
-            w.setStyleSheet(profile_field_css)
 
-        for w in (self.in_name, self.in_email, self.in_area,
-                  self.in_vehicle_make, self.in_vehicle_model,
-                  self.in_vehicle_color, self.in_vehicle_plate):
-            w.setMinimumWidth(300)
-            w.setMaximumWidth(420)
+        for w in (self.in_name, self.in_email, self.in_area):
+            w.setMinimumWidth(300); w.setMaximumWidth(420)
 
-        # ---- form layout ----
-        self.form = QFormLayout()
-        form = self.form
+        form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
         form.setFormAlignment(Qt.AlignHCenter | Qt.AlignTop)
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
-
+        form.setHorizontalSpacing(14); form.setVerticalSpacing(10)
         form.addRow("Name:", self.in_name)
         form.addRow("Email:", self.in_email)
         form.addRow("Area:", self.in_area)
@@ -1032,24 +730,11 @@ class ProfileScreen(QWidget):
         self._update_rating_label()
         form.addRow("", self.chk_driver)
 
-        # vehicle fields always visible but disabled when not a driver
-        form.addRow("Car make:", self.in_vehicle_make)
-        form.addRow("Car model:", self.in_vehicle_model)
-        form.addRow("Car color:", self.in_vehicle_color)
-        form.addRow("Plate:", self.in_vehicle_plate)
-
-        self.err = QLabel("")
-        self.err.setWordWrap(True)
-        self.err.setStyleSheet("color: red;")
-        self.err.setVisible(False)
-
-        self.ok = QLabel("")
-        self.ok.setWordWrap(True)
-        self.ok.setStyleSheet("color: #0a7a0a;")
-        self.ok.setVisible(False)
+        self.err = QLabel(""); self.err.setWordWrap(True); self.err.setStyleSheet("color: red;"); self.err.setVisible(False)
+        self.ok = QLabel(""); self.ok.setWordWrap(True); self.ok.setStyleSheet("color: #0a7a0a;"); self.ok.setVisible(False)
 
         self.weather_icon = QLabel()
-        self.weather_icon.setFixedSize(48, 48)
+        self.weather_icon.setFixedSize(48,48)
         self.weather_icon.setScaledContents(True)
 
         self.weather_label = QLabel("")
@@ -1057,7 +742,9 @@ class ProfileScreen(QWidget):
 
         weather_row = QHBoxLayout()
         weather_row.addWidget(self.weather_icon)
-        weather_row.addWidget(self.weather_label, 1)
+        weather_row.addWidget(self.weather_label,1)
+
+        
 
         self.btn_edit = QPushButton("Edit")
         self.btn_save = QPushButton("Save")
@@ -1067,17 +754,20 @@ class ProfileScreen(QWidget):
         self.btn_save.clicked.connect(self.on_save)
         self.btn_cancel.clicked.connect(self.on_cancel)
 
-        # Driver checkbox toggles vehicle fields
-        self.chk_driver.toggled.connect(self._on_driver_toggled)
-
         root = QVBoxLayout(self)
         root.addSpacing(10)
         root.addLayout(form)
         root.addWidget(self.err)
         root.addWidget(self.ok)
         root.addSpacing(8)
+
         root.addLayout(weather_row)
+
         root.addSpacing(12)
+        
+        
+        root.addSpacing(8)
+
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.btn_edit)
@@ -1086,59 +776,20 @@ class ProfileScreen(QWidget):
         root.addLayout(buttons)
         root.addStretch(1)
 
-        # start in view mode
         self.set_edit_mode(False)
-        # set proper enabled/disabled state for vehicle fields
-        self._update_vehicle_visibility(self.snapshot["is_driver"])
-        self._on_driver_toggled(self.snapshot["is_driver"])
-        # load weather
         self.on_weather_clicked()
 
-    # ---------- helpers ----------
     def set_edit_mode(self, on: bool):
         editing = bool(on)
-        for w in (self.in_name, self.in_email, self.in_area,
-                  self.in_vehicle_make, self.in_vehicle_model,
-                  self.in_vehicle_color, self.in_vehicle_plate):
+        for w in (self.in_name, self.in_email, self.in_area):
             w.setReadOnly(not editing)
         self.chk_driver.setEnabled(editing)
-
-        # but even in edit mode, only enable vehicle fields if driver is checked
-        self._on_driver_toggled(self.chk_driver.isChecked())
 
         self.btn_edit.setEnabled(not editing)
         self.btn_save.setEnabled(editing)
         self.btn_cancel.setEnabled(editing)
 
-
-    def _on_driver_toggled(self, checked: bool):
-        """Enable + show car fields only when driver mode is ON."""
-        is_driver = bool(checked)
-
-        # visibility
-        self._update_vehicle_visibility(is_driver)
-
-        # enabled state (only if not read-only)
-        for w in (self.in_vehicle_make, self.in_vehicle_model,
-                  self.in_vehicle_color, self.in_vehicle_plate):
-            w.setEnabled(is_driver and not w.isReadOnly())
-
-
-    def _update_vehicle_visibility(self, is_driver: bool):
-        """Show/hide car fields + labels depending on driver mode."""
-        widgets = (
-            self.in_vehicle_make,
-            self.in_vehicle_model,
-            self.in_vehicle_color,
-            self.in_vehicle_plate,
-        )
-        for w in widgets:
-            w.setVisible(is_driver)
-            if hasattr(self, "form"):
-                label = self.form.labelForField(w)
-                if label is not None:
-                    label.setVisible(is_driver)
-
+        
 
     def reset_fields_from_snapshot(self):
         self.in_name.setText(self.snapshot["name"])
@@ -1146,22 +797,12 @@ class ProfileScreen(QWidget):
         self.in_area.setText(self.snapshot["area"])
         self.chk_driver.setChecked(self.snapshot["is_driver"])
 
-        self.in_vehicle_make.setText(self.snapshot["vehicle_make"])
-        self.in_vehicle_model.setText(self.snapshot["vehicle_model"])
-        self.in_vehicle_color.setText(self.snapshot["vehicle_color"])
-        self.in_vehicle_plate.setText(self.snapshot["vehicle_plate"])
-
     def show_error(self, msg):
-        self.err.setText(msg)
-        self.err.setVisible(True)
-        self.ok.setVisible(False)
+        self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
 
     def show_ok(self, msg):
-        self.ok.setText(msg)
-        self.ok.setVisible(True)
-        self.err.setVisible(False)
+        self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
 
-    # ---------- buttons ----------
     def on_edit(self):
         self.reset_fields_from_snapshot()
         self.set_edit_mode(True)
@@ -1176,32 +817,13 @@ class ProfileScreen(QWidget):
             self.show_error("Area is required")
             return
 
-        is_driver = bool(self.chk_driver.isChecked())
-
-        # If driver mode ON => car details are required
-        make  = self.in_vehicle_make.text().strip()
-        model = self.in_vehicle_model.text().strip()
-        color = self.in_vehicle_color.text().strip()
-        plate = self.in_vehicle_plate.text().strip()
-
-        if is_driver and (not make or not model or not color or not plate):
-            self.show_error("Please fill car make, model, color, and plate to enable driver mode.")
-            return
-
         payload = {
             "name": self.in_name.text().strip(),
             "email": self.in_email.text().strip(),
             "area": area,
-            "is_driver": is_driver,
-            "vehicle": {
-                "make": make if is_driver else "",
-                "model": model if is_driver else "",
-                "color": color if is_driver else "",
-                "plate": plate if is_driver else "",
-            },
+            "is_driver": bool(self.chk_driver.isChecked())
         }
-
-        req = {"type": "PROFILE.SET_REQ", "id": str(uuid.uuid4()), "payload": payload}
+        req = {"type":"PROFILE.SET_REQ", "id": str(uuid.uuid4()), "payload": payload}
         try:
             resp = self.session.request(req)
         except Exception as e:
@@ -1210,29 +832,23 @@ class ProfileScreen(QWidget):
 
         if resp.get("type") == "PROFILE.SET_RES":
             prev_driver = self.snapshot["is_driver"]
-            # update snapshot
-            self.snapshot["name"] = payload["name"]
-            self.snapshot["email"] = payload["email"]
-            self.snapshot["area"] = payload["area"]
-            self.snapshot["is_driver"] = is_driver
-            self.snapshot["vehicle_make"] = payload["vehicle"]["make"]
-            self.snapshot["vehicle_model"] = payload["vehicle"]["model"]
-            self.snapshot["vehicle_color"] = payload["vehicle"]["color"]
-            self.snapshot["vehicle_plate"] = payload["vehicle"]["plate"]
-
+            self.snapshot.update(payload)
             self.set_edit_mode(False)
             self.show_ok("Profile saved.")
-            if prev_driver != is_driver:
-                self.driverModeChanged.emit(is_driver)
+            if prev_driver != self.snapshot["is_driver"]:
+                self.driverModeChanged.emit(self.snapshot["is_driver"])
+            self._update_rating_label()
+  
         elif resp.get("type") == "ERROR":
             self.show_error(resp.get("payload", {}).get("message", "Failed to save profile."))
         else:
             self.show_error(f"Unexpected response: {resp.get('type')}")
 
     def on_weather_clicked(self):
-        # Beirut loc
+        #bei loc
         lat, lon = 33.8938, 35.5018
 
+        
         self.weather_label.setWordWrap(False)
         self.weather_label.setText("Today's weather in Beirut - loading...")
         self.weather_icon.clear()
@@ -1242,7 +858,7 @@ class ProfileScreen(QWidget):
             self.weather_label.setText("Today's weather in Beirut - unavailable.")
             return
 
-        self.weather_label.setWordWrap(False)
+        self.weather_label.setWordWrap(False) 
         self.weather_label.setText(
             f" Today's weather in Beirut - {info['temp_c']}°C — {info['condition_text']}"
         )
@@ -1255,24 +871,17 @@ class ProfileScreen(QWidget):
         except Exception as e:
             print("Weather icon failed:", e)
 
-class ScheduleInfoScreen(QWidget):
-    """Shown to passengers: explains that schedule is driver-only."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        v = QVBoxLayout(self)
-        lbl = QLabel(
-            "Schedule is available only for drivers.\n\n"
-            "To add a weekly schedule:\n"
-            "1. Go to the Profile tab.\n"
-            "2. Enable 'Driver Mode' and fill in your car details.\n"
-            "3. Save your profile.\n\n"
-            "Once Driver Mode is on, you'll see the schedule editor here."
-        )
-        lbl.setWordWrap(True)
-        v.addStretch(1)
-        v.addWidget(lbl, 0, Qt.AlignCenter)
-        v.addStretch(1)
+    def _update_rating_label(self):
+        avg = self.snapshot.get("rating_avg")
+        count = self.snapshot.get("rating_count")
 
+        if count is None or count == 0:
+            self.rating_label.setText("No ratings yet")
+            return
+
+        # format avg to 1 decimal place
+        avg_str = f"{avg:.1f}"
+        self.rating_label.setText(f"{avg_str} ★ ({count})")
 
     def update_from_user_preview(self, preview: dict):
         """
@@ -1574,7 +1183,7 @@ class RideRequestPage(QWidget):
         self.btn_submit.clicked.connect(self.on_submit)
 
         self.btn_cancel = QPushButton("Cancel request")
-        set_visible(self.btn_cancel, False)
+        self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self.on_cancel_clicked)
         self._update_direction_hints()
 
@@ -1734,8 +1343,8 @@ class RideRequestPage(QWidget):
             found  = p.get("candidates_found", 0)
 
             self.current_request_id = req_id
-            set_visible(self.btn_cancel, True)
-            set_visible(self.btn_submit, False)
+            self.btn_cancel.setEnabled(True)
+            self.btn_submit.setEnabled(False)
 
             self.lbl_request_id.setText(f"Request ID: {req_id}")
             self.lbl_status.setText(f"Status: open — compatible drivers found: {found}")
@@ -1747,8 +1356,7 @@ class RideRequestPage(QWidget):
             msg = p.get("message", "Failed to create ride request")
             if code == "PASSENGER_BUSY":
                 self.current_request_id = None
-                set_visible(self.btn_cancel, False)
-                set_visible(self.btn_submit, True)
+                self.btn_cancel.setEnabled(False)
             self.show_error(msg)
         else:
             self.show_error(f"Unexpected response: {rtype}")
@@ -1802,7 +1410,7 @@ class RideRequestPage(QWidget):
     # =====================================================================
     def handle_matched(self, payload):
         self.lbl_status.setText("Status: A driver has accepted your request!")
-        set_visible(self.btn_cancel, False)
+        self.btn_cancel.setEnabled(False)
 
     def set_idle_state(self):
         self.current_request_id = None
@@ -1810,8 +1418,8 @@ class RideRequestPage(QWidget):
         try: self.poll_timer.stop()
         except: pass
 
-        set_visible(self.btn_cancel, False)
-        set_visible(self.btn_submit, True)
+        self.btn_cancel.setEnabled(False)
+        self.btn_submit.setEnabled(True)
 
         self.lbl_request_id.setText("Request ID: —")
         self.lbl_status.setText("Status: —")
@@ -2019,143 +1627,307 @@ class CurrentRidePage(QWidget):
 
         v = QVBoxLayout(self)
 
-        # Top info label (who you're riding with)
         self.info_label = QLabel("No active ride")
-        self.info_label.setWordWrap(True)
         v.addWidget(self.info_label)
 
-        # Chat area
         self.chat_box = QTextEdit()
         self.chat_box.setReadOnly(True)
-        self.chat_box.setStyleSheet("QTextEdit, QTextEdit * { all: unset; background: transparent; }")
+        self.chat_box.setStyleSheet("""
+            QTextEdit {
+                background-color: #020617;
+                border-radius: 18px;
+                border: 1px solid rgba(148,163,184,0.35);
+                padding: 10px;
+            }
+        """)
 
         v.addWidget(self.chat_box, 1)
 
-        # Chat input
         self.chat_input = QLineEdit()
-        self.chat_input.setObjectName("chatInput")  # so stylesheet can target it
         self.chat_input.setPlaceholderText("Type a message...")
+        self.chat_input.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(15,23,42,0.9);
+                border-radius: 999px;
+                padding: 8px 12px;
+                border: 1px solid rgba(148,163,184,0.35);
+            }
+        """)
         v.addWidget(self.chat_input)
 
-        # Buttons row
         h = QHBoxLayout()
         self.send_btn = QPushButton("Send")
         self.complete_btn = QPushButton("Complete Ride")
         h.addWidget(self.send_btn)
-        h.addStretch(1)
         h.addWidget(self.complete_btn)
         v.addLayout(h)
 
-        # hide complete button by default (passenger view)
+        # hide complete button by default (passenger)
         self.complete_btn.hide()
 
+        
         self.send_btn.clicked.connect(self.on_send_clicked)
-
-    # ===== Chat bubbles =====
+    
     def append_bubble(self, text: str, outgoing: bool, timestamp=None):
+        """
+        Render a single message as a left/right chat bubble
+        with rounded corners and a small timestamp.
+        """
         if not text:
             return
 
         safe = html.escape(text).replace("\n", "<br/>")
 
-        mw = self.window()
-        other_name = getattr(mw, "other_party_name", "Them") if mw else "Them"
-        is_dark = getattr(mw, "is_dark_mode", True)
-
         if outgoing:
-            side = "right"
-            bg = "#4f46e5"
-            fg = "#ffffff"
-            sender = "You"
+            align = "right"
+            bg = "#4f46e5"   # indigo
+            fg = "#f9fafb"
+            label = "You"
         else:
-            side = "left"
-            bg = "#e5e7eb" if not is_dark else "#1f2937"
-            fg = "#111827" if not is_dark else "#e5e7eb"
-            sender = other_name
+            align = "left"
+            bg = "#111827"   # dark gray
+            fg = "#e5e7eb"
+            label = "Them"
 
         if timestamp is None:
             timestamp = QDateTime.currentDateTime()
-        ts = timestamp.toString("HH:mm")
+        ts_str = timestamp.toString("HH:mm")
 
-        html_blob = f"""
-        <div style="width:100%; text-align:{side}; margin:8px 0;">
-            <div style="
-                display:inline-block;
-                max-width:60%;
-                background:{bg};
-                color:{fg};
-                padding:10px 14px;
-                border-radius:18px;
-                font-size:10pt;
-                line-height:1.4;
-                box-shadow:0px 2px 5px rgba(0,0,0,0.25);
-                word-wrap:break-word;
-            ">
-                <div style="font-size:8pt; opacity:0.7; margin-bottom:4px;">
-                    {sender}
-                </div>
+        # table trick so Qt actually honors left/right alignment
+        bubble_html = f"""
+        <table width="100%" cellspacing="0" cellpadding="0">
+          <tr>
+            <td align="{align}">
+              <span style="
+                  background-color:{bg};
+                  color:{fg};
+                  padding:8px 12px;
+                  border-radius:18px;
+                  font-size:10pt;
+                  display:inline-block;
+              ">
+                <span style="font-size:8pt; opacity:0.7;">{label}:</span>
                 {safe}
-                <div style="font-size:8pt; text-align:right; opacity:0.6; margin-top:6px;">
-                    {ts}
-                </div>
-            </div>
-        </div>
+                <span style="font-size:8pt; opacity:0.6; margin-left:8px;">
+                  {ts_str}
+                </span>
+              </span>
+            </td>
+          </tr>
+        </table>
         """
 
         cursor = self.chat_box.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(html_blob)
-        cursor.insertHtml("<br/>")
         self.chat_box.setTextCursor(cursor)
+        self.chat_box.insertHtml(bubble_html)
+        self.chat_box.moveCursor(QTextCursor.End)
         self.chat_box.ensureCursorVisible()
 
-    # ===== Sending =====
+
+
     def on_send_clicked(self):
         msg = self.chat_input.text().strip()
         if not msg:
             return
-
         mw = self.window()
         ok = False
         if hasattr(mw, "send_chat_message"):
             ok = mw.send_chat_message(msg)
+        
+            if ok:
+                self.append_bubble(msg, outgoing=True)
+                self.chat_input.clear()
+            else:
+                QMessageBox.warning(self, "Send Failed", "Failed to send message.")
 
-        if ok:
-            self.append_bubble(msg, outgoing=True)
-            self.chat_input.clear()
-        else:
-            QMessageBox.warning(self, "Send Failed", "Failed to send message.")
-
-    # ===== Load states =====
     def load_for_driver(self, match_payload):
         """
         Called when driver receives a MATCH notification
         """
-        p = match_payload.get("passenger_info", {}) or {}
+        p = match_payload.get("passenger_info", {})
         passenger_name = p.get("name", "Passenger")
-        self.info_label.setText(f"Passenger matched!\nRiding with: {passenger_name}")
+        driver_name = match_payload.get("driver_info", {}).get("name", "Driver")
+        self.info_label.setText(f"Passenger matched! Ride with passenger: {passenger_name}")
         self.complete_btn.show()
 
     def load_for_passenger(self, payload):
         """
-        Called when passenger receives a MATCH notification
+        Called when passenger receives MATCH notification
         """
-        d = payload.get("driver_info", {}) or {}
-        name = d.get("name") or "Driver"
-
-        vehicle = d.get("vehicle") or {}
-        model = vehicle.get("model") or "Unknown"
-        color = vehicle.get("color") or "Unknown"
-        plate = vehicle.get("plate") or "Unknown"
+        d = payload.get("driver_info", {})
+        name = d.get("name", "Driver")
+        model = d.get("vehicle_model", "Unknown")
+        color = d.get("vehicle_color", "Unknown")
+        plate = d.get("vehicle_plate", "Unknown")
 
         self.info_label.setText(
-            f"Driver matched!\n"
-            f"Name: {name}\n"
-            f"Car: {model} ({color})\n"
-            f"Plate: {plate}"
+            f"Driver matched!\nName: {name}\nCar: {model} ({color})\nPlate: {plate}"
         )
-
         self.complete_btn.hide()
+
+#============
+# rating
+# =============
+
+class StarRatingWidget(QWidget):
+    ratingChanged = pyqtSignal(int)
+
+    def __init__(self, parent=None, max_stars=5):
+        super().__init__(parent)
+        self.max_stars = max_stars
+        self._rating = 0
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self._pix_empty = self._make_star_pixmap(28, QColor("#4b5563"))   # grey
+        self._pix_filled = self._make_star_pixmap(28, QColor("#facc15"))  # yellow
+
+        self._buttons: list[QPushButton] = []
+        for i in range(max_stars):
+            btn = QPushButton()
+            btn.setCheckable(True)
+            btn.setFlat(True)
+            btn.setIcon(QIcon(self._pix_empty))
+            btn.setIconSize(self._pix_empty.size())
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedSize(36, 36)
+            btn.setStyleSheet("""
+                QPushButton {
+                    border: none;
+                    background-color: transparent;
+                    font-size: 22px;
+                    color: #4b5563;
+                }
+            """)
+            btn.clicked.connect(lambda _=False, idx=i: self.set_rating(idx + 1))
+            self._buttons.append(btn)
+            layout.addWidget(btn)
+
+        layout.addStretch(1)
+    
+    def _make_star_pixmap(self, size: int, color: QColor) -> QPixmap:
+        """Draw a 5-point star into a transparent pixmap."""
+        import math
+
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(color)
+        painter.setPen(Qt.NoPen)
+
+        cx = cy = size / 2.0
+        outer_r = size * 0.45
+        inner_r = size * 0.20
+
+        points = []
+        # 10 points: outer, inner, outer, inner...
+        for i in range(10):
+            angle = math.pi / 2 + i * math.pi / 5  # start from top
+            r = outer_r if i % 2 == 0 else inner_r
+            x = cx + r * math.cos(angle)
+            y = cy - r * math.sin(angle)
+            points.append(QPointF(x, y))
+
+        poly = QPolygonF(points)
+        painter.drawPolygon(poly)
+        painter.end()
+        return pm
+
+    def set_rating(self, value: int):
+        value = max(0, min(self.max_stars, int(value)))
+        self._rating = value
+        for i, btn in enumerate(self._buttons, start=1):
+            filled = i <= value
+            btn.setChecked(filled)
+            btn.setIcon(QIcon(self._pix_filled if filled else self._pix_empty))
+        self.ratingChanged.emit(self._rating)
+
+    def rating(self) -> int:
+        return self._rating
+
+
+class RatingDialog(QDialog):
+    def __init__(self, parent=None, title="Rate your ride", subtitle="How was your ride experience?"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+
+        self.setMinimumWidth(480)
+        self.setMaximumWidth(480)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #020617;
+            }
+            QLabel {
+                color: #e5e7eb;
+                background-color: transparent;
+            }
+            QPushButton {
+                background-color: #111827;
+                color: #e5e7eb;
+                border-radius: 10px;
+                padding: 6px 14px;
+                border: 1px solid #1f2937;
+            }
+            QPushButton:hover {
+                background-color: #1f2937;
+                border-color: #4b5563;
+            }
+            QPushButton:pressed {
+                background-color: #4f46e5;
+                border-color: #4f46e5;
+                color: #f9fafb;
+            }
+        """)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 16, 20, 16)
+        v.setSpacing(10)
+
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet("font-size: 14pt; font-weight: 600;")
+        v.addWidget(lbl_title)
+
+        lbl_sub = QLabel(subtitle)
+        lbl_sub.setWordWrap(True)
+        lbl_sub.setStyleSheet("color: #9ca3af;")
+        v.addWidget(lbl_sub)
+
+        self.star_widget = StarRatingWidget(self)
+        v.addWidget(self.star_widget)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        self.btn_skip = QPushButton("Skip")
+        self.btn_ok = QPushButton("Submit")
+
+        self.btn_skip.clicked.connect(self.reject)
+        self.btn_ok.clicked.connect(self._on_submit)
+
+        btn_row.addWidget(self.btn_skip)
+        btn_row.addWidget(self.btn_ok)
+        v.addLayout(btn_row)
+
+    def _on_submit(self):
+        if self.star_widget.rating() <= 0:
+            QMessageBox.information(self, "Rating", "Select at least one star or press Skip.")
+            return
+        self.accept()
+
+    def get_rating(self):
+        """Returns 1–5 or None if skipped."""
+        result = self.exec_()
+        if result == QDialog.Accepted:
+            return self.star_widget.rating()
+        return None
+
 
 # =============================================================================
 # Main window: wires everything together
@@ -2175,7 +1947,6 @@ class MainWindow(QMainWindow):
         self.p2p_sock = None
         self.p2p_thread = None
         self.chat_endpoint = None
-        self.other_party_name = None
         self.incoming_p2p_connection.connect(self._on_incoming_p2p_connection)
         
 
@@ -2208,7 +1979,6 @@ class MainWindow(QMainWindow):
         self.btn_ride    = QPushButton("Ride")
         self.btn_current = QPushButton("Current Ride")
         self.btn_logout = QPushButton("Logout")
-        self.btn_theme   = QPushButton("Light mode")
         
         for b in (self.btn_profile, self.btn_sched, self.btn_ride, self.btn_current):
             b.setCheckable(True)
@@ -2216,12 +1986,12 @@ class MainWindow(QMainWindow):
             left_l.addWidget(b)
         left_l.addStretch(1)
 
-        left_l.addWidget(self.btn_theme)
+        
+
         left_l.addWidget(self.btn_logout)
         self.btn_logout.clicked.connect(self.on_logout)
 
-        self.current_theme = "dark"
-        self.btn_theme.clicked.connect(self.toggle_theme)
+        
 
         self.stack = QStackedWidget()
 
@@ -2244,7 +2014,7 @@ class MainWindow(QMainWindow):
         self.btn_ride.clicked.connect(lambda: self.stack.setCurrentWidget(self.ride_page))
         self.btn_current.clicked.connect(lambda: self.stack.setCurrentWidget(self.current_ride_page))
 
-        set_visible(self.btn_current, False)
+        self.btn_current.setEnabled(False)
         self.btn_profile.setChecked(True)
         self.stack.setCurrentWidget(self.profile_page)
         
@@ -2261,16 +2031,10 @@ class MainWindow(QMainWindow):
         # Schedule initially disabled until we know driver mode
         self.set_schedule_enabled(False)
 
-    def set_theme(self, theme: str):
-        self.theme = theme
-        if theme == "dark":
-            QApplication.instance().setStyleSheet(DARK_STYLESHEET)
-        else:
-            QApplication.instance().setStyleSheet(LIGHT_STYLESHEET)
-
-
     def set_schedule_enabled(self, on: bool):
-        return #since passenger has to know
+        self.btn_sched.setEnabled(bool(on))
+        if hasattr(self, "schedule_page"):
+            self.schedule_page.setEnabled(bool(on))
 
     def after_login(self, user_preview: dict):
         self.user_preview = user_preview
@@ -2285,6 +2049,12 @@ class MainWindow(QMainWindow):
         self.stack.insertWidget(0, self.profile_page)
 
         
+        self.stack.removeWidget(self.schedule_page)
+        self.schedule_page.deleteLater()
+        self.schedule_page = ScheduleScreen(self.session)
+        self.stack.insertWidget(1, self.schedule_page)
+
+        
         is_driver = bool(user_preview.get("is_driver", False))
         self.on_driver_mode_changed(is_driver)
 
@@ -2295,25 +2065,16 @@ class MainWindow(QMainWindow):
 
 
     def on_driver_mode_changed(self, is_driver: bool):
+        # enable/disable Schedule tab
+        self.set_schedule_enabled(is_driver)
+
         # P2P listener follows driver mode
         if is_driver:
             self.start_p2p_listener()
         else:
             self.stop_p2p_listener()
 
-        # ----- swap schedule page (driver vs passenger) -----
-        if hasattr(self, "schedule_page"):
-            self.stack.removeWidget(self.schedule_page)
-            self.schedule_page.deleteLater()
-
-        if is_driver:
-            self.schedule_page = ScheduleScreen(self.session)
-        else:
-            self.schedule_page = ScheduleInfoScreen()
-
-        self.stack.addWidget(self.schedule_page)
-
-        # ----- swap ride page (driver/passenger views) -----
+        # swap ride page (index 2) between driver/passenger views
         if hasattr(self, "ride_page"):
             self.stack.removeWidget(self.ride_page)
             self.ride_page.deleteLater()
@@ -2325,7 +2086,7 @@ class MainWindow(QMainWindow):
             self.ride_page = RideRequestPage(self.session)
 
         self.stack.addWidget(self.ride_page)
-
+        
 
     def closeEvent(self, event):
         """on window close, logout cleanly and close the session"""
@@ -2370,7 +2131,7 @@ class MainWindow(QMainWindow):
         self.btn_profile.setChecked(False)
         self.btn_sched.setChecked(False)
         self.btn_ride.setChecked(False)
-        set_visible(self.btn_current, False)
+        self.btn_current.setEnabled(False)
         self.stack.setCurrentWidget(self.profile_page)
 
     def _on_incoming_p2p_connection(self, conn, addr):
@@ -2495,18 +2256,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "chat_endpoint", None) is not None:
             self.chat_endpoint = None
 
-    def toggle_theme(self):
-        if getattr(self, "current_theme", "dark") == "dark":
-            self.current_theme = "light"
-            apply_theme("light")
-            self.btn_theme.setText("Dark mode")
-        else:
-            self.current_theme = "dark"
-            apply_theme("dark")
-            self.btn_theme.setText("Light mode")
-
     
-
     def on_push_received(self, msg: dict):
         t = msg.get("type")
         payload = msg.get("payload", {})
@@ -2514,8 +2264,8 @@ class MainWindow(QMainWindow):
         if t == "RIDE.MATCHED":
             #debug message
             print("MainWindow: RIDE.MATCHED received, payload =", payload)
-            set_visible(self.btn_ride, False)
-            set_visible(self.btn_current, True)
+            self.btn_ride.setEnabled(False)
+            self.btn_current.setEnabled(True)
 
             self.btn_current.setChecked(True)
             self.stack.setCurrentWidget(self.current_ride_page)
@@ -2532,8 +2282,6 @@ class MainWindow(QMainWindow):
                 self.on_ride_matched(msg)
                 driver_ip = payload.get("driver_ip")
                 driver_port = payload.get("driver_port")
-                d = payload.get("driver_info", {})
-                self.other_party_name = d.get("name", "Them")
 
                 if driver_ip and driver_port:
                     try:
@@ -2604,8 +2352,9 @@ class MainWindow(QMainWindow):
             self.show_rating_dialog()
 
         try:
-            set_visible(self.btn_current, False)
-            set_visible(self.btn_ride, True)
+            self.return_to_idle_state()
+            self.btn_current.setEnabled(False)
+            self.btn_ride.setEnabled(True)
             self.btn_ride.setChecked(True)
             self.stack.setCurrentWidget(self.ride_page)
             if hasattr(self, "current_ride_page"):
@@ -2693,10 +2442,10 @@ class MainWindow(QMainWindow):
         # driver or passenger
 
         # Disable current ride
-        set_visible(self.btn_current, False)
+        self.btn_current.setEnabled(False)
 
         # Enable ride
-        set_visible(self.btn_ride, True)
+        self.btn_ride.setEnabled(True)
         self.btn_ride.setChecked(True)
 
 
@@ -2723,8 +2472,8 @@ class MainWindow(QMainWindow):
         We immediately go into 'current ride' state for the driver.
         """
         # Disable ride tab, enable Current Ride tab
-        set_visible(self.btn_ride, False)
-        set_visible(self.btn_current, True)
+        self.btn_ride.setEnabled(False)
+        self.btn_current.setEnabled(True)
 
         # Switch UI to Current Ride
         self.btn_current.setChecked(True)
@@ -2736,9 +2485,6 @@ class MainWindow(QMainWindow):
         # Build a payload compatible with load_for_driver
         match_payload = dict(payload)
         match_payload.setdefault("request_id", request_id)
-
-        passenger_info = payload.get("passenger_info", {})
-        self.other_party_name = passenger_info.get("name", "Them")
 
         self.current_ride_page.load_for_driver(match_payload)
 
@@ -2766,18 +2512,19 @@ class MainWindow(QMainWindow):
 
 
 
+
+
+
+
+
+
+
 def main():
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    # default theme
-    app.setStyleSheet(DARK_STYLESHEET)
-
+    apply_bento_theme(app)
     window = MainWindow()
-    window.theme = "dark"  # so bubbles know what to use
     window.show()
     sys.exit(app.exec_())
-
 
 if __name__ == "__main__":
     main()
