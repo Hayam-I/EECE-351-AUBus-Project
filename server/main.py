@@ -993,12 +993,41 @@ def _ride_rate(conn_state, payload, mid):
             "UPDATE users SET rating_sum=?, rating_count=?, rating_avg=? WHERE user_id=?",
             (new_sum, new_count, new_avg, ratee_id)
         )
+        cur.execute(
+            "SELECT name, email, area, is_driver, rating_avg, rating_count "
+            "FROM users WHERE user_id=?",
+            (rater_id,)
+        )
+        updated_row = cur.fetchone()
 
         conn.commit()
+        ratee_sock = None
+
+        with STATE_LOCK:
+            # if ratee is driver
+            if ratee_id in ONLINE_DRIVERS:
+                ratee_sock = ONLINE_DRIVERS[ratee_id]
+
+            # if ratee is passenger
+            else:
+                for req_key, info in REQUEST_PASSENGERS.items():
+                    if info.get("user_id") == ratee_id:
+                        ratee_sock = info.get("sock")
+                        break
+
+        if ratee_sock:
+            _send_json_safe(ratee_sock, {
+                "type": "PROFILE.UPDATED",
+                "id": _uuid(),
+                "payload": {
+                    "rating_avg": new_avg,
+                    "rating_count": new_count,
+                }
+            })
+
+
         conn.close()
 
-        cur.execute("SELECT name, email, area, is_driver, rating_avg, rating_count FROM users WHERE user_id=?", (rater_id,))
-        updated_row = cur.fetchone()
         updated_user = {
             "name": updated_row[0],
             "email": updated_row[1],
@@ -1256,10 +1285,20 @@ def handle_message(msg: dict, conn_state: dict):
             # 1) create request row with lat/lon
             cur.execute(
                 """
-                INSERT INTO ride_req (user_id, area, direction, departure_time, lat, lon, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
+                INSERT INTO ride_req (
+                    user_id,
+                    area,
+                    direction,
+                    departure_time,
+                    lat,
+                    lon,
+                    min_driver_rating,
+                    status,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
                 """,
-                (uid, area, direction, time_iso, lat, lon),
+                (uid, area, direction, time_iso, lat, lon, min_driver_rating),
             )
             req_id_int = cur.lastrowid
             request_id = f"req_{req_id_int}"

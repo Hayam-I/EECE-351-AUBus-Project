@@ -881,7 +881,17 @@ class ProfileScreen(QWidget):
         avg_str = f"{avg:.1f}"
         self.rating_label.setText(f"{avg_str} ★ ({count})")
 
+    def update_from_user_preview(self, preview: dict):
+        """
+        Update the profile fields when RIDE.RATE_RES returns new rating info.
+        """
+        self.snapshot.update({
+            "rating_avg": preview.get("rating_avg", self.snapshot.get("rating_avg")),
+            "rating_count": preview.get("rating_count", self.snapshot.get("rating_count")),
+        })
 
+        # Update the rating label
+        self._update_rating_label()
 # =============================================================================
 # ScheduleScreen
 # =============================================================================
@@ -2223,12 +2233,13 @@ class MainWindow(QMainWindow):
         self.p2p_sock = None
         self.p2p_thread = None
 
-        if self.chat_endpoint is not None:
+        ep = getattr(self, "chat_endpoint", None)
+        self.chat_endpoint = None  # remove reference first
+        if ep:
             try:
-                self.chat_endpoint.close()
-            except Exception:
+                ep.close()
+            except:
                 pass
-            self.chat_endpoint = None
 
 
     def on_p2p_message(self, text: str):
@@ -2299,6 +2310,19 @@ class MainWindow(QMainWindow):
         
         elif t == "DRIVER.BROADCAST":
             self.on_driver_broadcast(msg)
+        
+        elif t == "PROFILE.UPDATED":
+            # Update cached preview
+            if payload:
+                if "rating_avg" in payload:
+                    self.user_preview["rating_avg"] = payload["rating_avg"]
+                if "rating_count" in payload:
+                    self.user_preview["rating_count"] = payload["rating_count"]
+
+            # Refresh profile screen if visible
+            if isinstance(self.profile_page, ProfileScreen):
+                self.profile_page.update_from_user_preview(self.user_preview)
+
     
     def on_ride_matched(self, msg: dict):
         payload = msg.get("payload", {})
@@ -2435,12 +2459,13 @@ class MainWindow(QMainWindow):
         self.current_ride_page.chat_box.clear()
         self.current_ride_page.info_label.setText("No active ride")
 
-        if self.chat_endpoint is not None:
+        ep = getattr(self, "chat_endpoint", None)
+        self.chat_endpoint = None  # remove reference first
+        if ep:
             try:
-                self.chat_endpoint.close()
-            except Exception:
+                ep.close()
+            except:
                 pass
-            self.chat_endpoint = None
 
 
     def on_driver_ride_accepted(self, request_id: str, payload: dict):
