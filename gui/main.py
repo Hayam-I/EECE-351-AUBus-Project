@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit
+    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QSpinBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
 from PyQt5.QtGui import QTextCursor, QPixmap
@@ -677,7 +677,7 @@ class JsonlSession(QObject):
 
             # Otherwise, treat as push / unsolicited
             t = msg.get("type")
-            if t in ("RIDE.MATCHED", "REQUEST.CLOSED", "DRIVER.BROADCAST"):
+            if t in ("RIDE.MATCHED", "REQUEST.CLOSED", "DRIVER.BROADCAST", "PROFILE.UPDATED"):
                 self.handle_push(msg)
                 continue
 
@@ -856,6 +856,22 @@ class RegisterForm(QWidget):
         rtype = resp.get("type")
         p = resp.get("payload", {})
 
+        rating = self.spin.value()
+        try:
+            self.session.request({
+                "type": "RIDE.RATE_REQ",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "request_id": self.request_id,  # e.g. "req_7"
+                    "rating": rating,
+                },
+            })
+        except Exception as e:
+            QMessageBox.warning(self, "Rating failed", f"Could not send rating: {e}")
+            return
+
+        self.accept()
+
         if rtype == "AUTH.REGISTER_RES":
             # success toast / message
             QMessageBox.information(self, "Success", "Account created. You can now log in.")
@@ -962,6 +978,8 @@ class ProfileScreen(QWidget):
             "vehicle_model": veh.get("model", "") if isinstance(veh, dict) else "",
             "vehicle_color": veh.get("color", "") if isinstance(veh, dict) else "",
             "vehicle_plate": veh.get("plate", "") if isinstance(veh, dict) else "",
+            "rating_avg": user_preview.get("rating_avg",0.0),
+            "rating_count": user_preview.get("rating_count",0)
         }
 
         # ---- basic fields ----
@@ -1031,6 +1049,8 @@ class ProfileScreen(QWidget):
         form.addRow("Car model:", self.in_vehicle_model)
         form.addRow("Car color:", self.in_vehicle_color)
         form.addRow("Plate:", self.in_vehicle_plate)
+        self.lbl_rating = QLabel("No reviews yet")
+        form.addRow("Rating:", self.lbl_rating)
 
         self.err = QLabel("")
         self.err.setWordWrap(True)
@@ -1154,6 +1174,17 @@ class ProfileScreen(QWidget):
         self.ok.setText(msg)
         self.ok.setVisible(True)
         self.err.setVisible(False)
+    
+    def update_from_user_preview(self, u: dict):
+        """Refresh rating info from the latest user preview."""
+        avg = u.get("rating_avg") or 0.0
+        count = u.get("rating_count") or 0
+
+        if count <= 0:
+            self.lbl_rating.setText("No reviews yet")
+        else:
+            self.lbl_rating.setText(f"{avg:.1f} ({count} reviews)")
+
 
     # ---------- buttons ----------
     def on_edit(self):
@@ -2218,7 +2249,9 @@ class MainWindow(QMainWindow):
         # Profile screen
         profile = ProfileScreen(self.session, user_preview)
         profile.driverModeChanged.connect(self.on_driver_mode_changed)
-
+        user_preview.setdefault("rating_avg", 0.0)
+        user_preview.setdefault("rating_count", 0)
+        profile.update_from_user_preview(user_preview)
         
         self.stack.removeWidget(self.profile_page)
         self.profile_page.deleteLater()
@@ -2445,175 +2478,250 @@ class MainWindow(QMainWindow):
             apply_theme("dark")
             self.btn_theme.setText("Light mode")
 
-    
+class RateRideDialog(QDialog):
+    def __init__(self, request_id: str, session, parent=None):
+        super().__init__(parent)
+        self.request_id = request_id
+        self.session = session
 
-    def on_push_received(self, msg: dict):
-        t = msg.get("type")
-        payload = msg.get("payload", {})
+        self.setWindowTitle("Rate your ride")
+        self.setModal(True)
 
-        if t == "RIDE.MATCHED":
-            #debug message
-            print("MainWindow: RIDE.MATCHED received, payload =", payload)
-            set_visible(self.btn_ride, False)
-            set_visible(self.btn_current, True)
+        self.spin = QSpinBox()
+        self.spin.setRange(1, 5)
+        self.spin.setValue(5)
 
-            self.btn_current.setChecked(True)
-            self.stack.setCurrentWidget(self.current_ride_page)
+        lbl = QLabel("How would you rate your ride (1–5)?")
 
-            req_id = payload.get("request_id")
-            if req_id is None and isinstance(self.ride_page, RideRequestPage):
-                req_id = self.ride_page.current_request_id
-            
-            self.active_request_id = req_id
-            if self.user_preview.get("is_driver"):
-                self.current_ride_page.load_for_driver(payload)
-            else:
-                self.current_ride_page.load_for_passenger(payload)
-                self.on_ride_matched(msg)
-                driver_ip = payload.get("driver_ip")
-                driver_port = payload.get("driver_port")
-                d = payload.get("driver_info", {})
-                self.other_party_name = d.get("name", "Them")
+        btn_ok = QPushButton("Submit")
+        btn_cancel = QPushButton("Skip")
 
-                if driver_ip and driver_port:
-                    try:
-                        sock  = socket.create_connection((driver_ip, int(driver_port)), timeout = 5.0)
-                        sock.settimeout(None)
-                    except Exception as e:
-                        QMessageBox.warning(self, "Chat", f"Could not connect to driver: {e}")
-                    else:
-                        if getattr(self, "chat_endpoint", None) is not None:
-                            self.chat_endpoint.close()
-                        
-                        self.chat_endpoint = P2PChatEndpoint(sock, self)
-                        self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
-                        self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
+        btn_ok.clicked.connect(self.on_submit)
+        btn_cancel.clicked.connect(self.reject)
 
-                        #self.current_ride_page.chat_box.append(f"<i>Connected to driver for chat</i>")
+        layout = QVBoxLayout()
+        layout.addWidget(lbl)
+        layout.addWidget(self.spin)
 
-                else:
-                    if self.current_ride_page is not None:
-                        self.current_ride_page.append_bubble(f"<i>Driver did not provide chat info</i>", outgoing = False)
-        
-        
-        
-        elif t == "REQUEST.CLOSED":
-            self.on_request_closed(msg)
-        
-        elif t == "DRIVER.BROADCAST":
-            self.on_driver_broadcast(msg)
-    
-    def on_ride_matched(self, msg: dict):
-        payload = msg.get("payload", {})
-        if isinstance(self.ride_page, RideRequestPage):
-            self.ride_page.handle_matched(payload)
-    
-    def on_request_closed(self, msg: dict):
-        """Called when server notifies that a ride was closed"""
-        payload = msg.get("payload", {})
-        if isinstance(self.ride_page, DriverRidePage):
-            self.ride_page.handle_request_closed(payload)
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(btn_ok)
+        btn_row.addWidget(btn_cancel)
+        layout.addLayout(btn_row)
 
-        if isinstance(self.ride_page, RideRequestPage):
-        # reset the passenger's request form state
-            self.ride_page.set_idle_state()
+        self.setLayout(layout)
 
-        try:
-            set_visible(self.btn_current, False)
-            set_visible(self.btn_ride, True)
-            self.btn_ride.setChecked(True)
-            self.stack.setCurrentWidget(self.ride_page)
-            if hasattr(self, "current_ride_page"):
-                self.current_ride_page.chat_box.clear()
-                self.current_ride_page.info_label.setText("No active ride")
-        except AttributeError:
-            pass
-    
-    def on_driver_broadcast(self, msg: dict):
-        if isinstance(self.ride_page, DriverRidePage):
-            self.ride_page.add_broadcast(msg.get("payload", {}))
-    
-    def complete_ride(self):
-        # DRIVER ONLY
-        payload = {"request_id": self.active_request_id}   # store this on match
-        res = self.session.request({"type": "RIDE.COMPLETE_REQ", "payload": payload})
-        if res["type"] == "RIDE.COMPLETE_RES":
-            QMessageBox.information(self, "Ride Completed", "Ride successfully completed.")
-            self.return_to_idle_state()
-    
-    def return_to_idle_state(self):
-        # driver or passenger
-
-        # Disable current ride
-        set_visible(self.btn_current, False)
-
-        # Enable ride
-        set_visible(self.btn_ride, True)
-        self.btn_ride.setChecked(True)
+    def on_submit(self):
+        rating = self.spin.value()
+        self.session.send_json({
+            "type": "RIDE.RATE_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {
+                "request_id": self.request_id,  # e.g. "req_7"
+                "rating": rating,
+            },
+        })
+        self.accept()
 
 
-        # Switch back to ride page
-        self.stack.setCurrentWidget(self.ride_page)
-        self.active_request_id = None
 
-        # clear chat/info
-        self.current_ride_page.chat_box.clear()
-        self.current_ride_page.info_label.setText("No active ride")
+def on_push_received(self, msg: dict):
+    t = msg.get("type")
+    payload = msg.get("payload", {})
 
-        if self.chat_endpoint is not None:
-            try:
-                self.chat_endpoint.close()
-            except Exception:
-                pass
-            self.chat_endpoint = None
-
-
-    def on_driver_ride_accepted(self, request_id: str, payload: dict):
-        """
-        Called when THIS driver accepts a ride successfully.
-        We immediately go into 'current ride' state for the driver.
-        """
-        # Disable ride tab, enable Current Ride tab
+    if t == "RIDE.MATCHED":
+        #debug message
+        print("MainWindow: RIDE.MATCHED received, payload =", payload)
         set_visible(self.btn_ride, False)
         set_visible(self.btn_current, True)
 
-        # Switch UI to Current Ride
         self.btn_current.setChecked(True)
         self.stack.setCurrentWidget(self.current_ride_page)
 
-        # Remember which request this ride is for (used by complete_ride)
-        self.active_request_id = request_id
+        req_id = payload.get("request_id")
+        if req_id is None and isinstance(self.ride_page, RideRequestPage):
+            req_id = self.ride_page.current_request_id
+        
+        self.active_request_id = req_id
+        if self.user_preview.get("is_driver"):
+            self.current_ride_page.load_for_driver(payload)
+        else:
+            self.current_ride_page.load_for_passenger(payload)
+            self.on_ride_matched(msg)
+            driver_ip = payload.get("driver_ip")
+            driver_port = payload.get("driver_port")
+            d = payload.get("driver_info", {})
+            self.other_party_name = d.get("name", "Them")
 
-        # Build a payload compatible with load_for_driver
-        match_payload = dict(payload)
-        match_payload.setdefault("request_id", request_id)
+            if driver_ip and driver_port:
+                try:
+                    sock  = socket.create_connection((driver_ip, int(driver_port)), timeout = 5.0)
+                    sock.settimeout(None)
+                except Exception as e:
+                    QMessageBox.warning(self, "Chat", f"Could not connect to driver: {e}")
+                else:
+                    if getattr(self, "chat_endpoint", None) is not None:
+                        self.chat_endpoint.close()
+                    
+                    self.chat_endpoint = P2PChatEndpoint(sock, self)
+                    self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
+                    self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
 
-        passenger_info = payload.get("passenger_info", {})
-        self.other_party_name = passenger_info.get("name", "Them")
+                    #self.current_ride_page.chat_box.append(f"<i>Connected to driver for chat</i>")
 
-        self.current_ride_page.load_for_driver(match_payload)
+            else:
+                if self.current_ride_page is not None:
+                    self.current_ride_page.append_bubble(f"<i>Driver did not provide chat info</i>", outgoing = False)
+    
+    
+    
+    elif t == "REQUEST.CLOSED":
+        self.on_request_closed(msg)
+    
+    elif t == "DRIVER.BROADCAST":
+        self.on_driver_broadcast(msg)
+    
+    elif t == "PROFILE.UPDATED":
+        # Update the cached user preview
+        if payload:
+            if "rating_avg" in payload:
+                self.user_preview["rating_avg"] = payload["rating_avg"]
+            if "rating_count" in payload:
+                self.user_preview["rating_count"] = payload["rating_count"]
 
-    def send_chat_message(self, text: str) -> bool:
-        """Send a chat message over the active P2P endpoint.
+        # If the profile screen is open, refresh it
+        if hasattr(self, "profile_page") and self.profile_page is not None:
+            try:
+                self.profile_page.update_from_user_preview(self.user_preview)
+            except Exception as e:
+                print("profile update failed:", e)
 
-        Returns True on success, False on failure.
-        Also prints the exception so we know what went wrong.
-        """
-        ep = getattr(self, "chat_endpoint", None)
-        if ep is None:
-            print("send_chat_message: no chat_endpoint")
-            return False
 
+def on_ride_matched(self, msg: dict):
+    payload = msg.get("payload", {})
+    if isinstance(self.ride_page, RideRequestPage):
+        self.ride_page.handle_matched(payload)
+
+def on_request_closed(self, msg: dict):
+    """Called when server notifies that a ride was closed"""
+    payload = msg.get("payload", {})
+    reason = payload.get("reason")
+    req_id = payload.get("request_id")
+    if isinstance(self.ride_page, DriverRidePage):
+        self.ride_page.handle_request_closed(payload)
+
+    if isinstance(self.ride_page, RideRequestPage):
+    # reset the passenger's request form state
+        self.ride_page.set_idle_state()
+    
+    if reason == "completed" and req_id:
+        # passenger rates driver
+        dlg = RateRideDialog(req_id, self.session, self)
+        dlg.exec()
+
+    try:
+        set_visible(self.btn_current, False)
+        set_visible(self.btn_ride, True)
+        self.btn_ride.setChecked(True)
+        self.stack.setCurrentWidget(self.ride_page)
+        if hasattr(self, "current_ride_page"):
+            self.current_ride_page.chat_box.clear()
+            self.current_ride_page.info_label.setText("No active ride")
+    except AttributeError:
+        pass
+
+def on_driver_broadcast(self, msg: dict):
+    if isinstance(self.ride_page, DriverRidePage):
+        self.ride_page.add_broadcast(msg.get("payload", {}))
+
+def complete_ride(self):
+    # DRIVER ONLY
+    payload = {"request_id": self.active_request_id}   # store this on match
+    res = self.session.request({"type": "RIDE.COMPLETE_REQ", "payload": payload})
+    if res["type"] == "RIDE.COMPLETE_RES":
+        QMessageBox.information(self, "Ride Completed", "Ride successfully completed.")
+
+        # Driver rates passenger
+        if self.active_request_id:
+            dlg = RateRideDialog(self.active_request_id, self.session, self)
+            dlg.exec_()
+
+        self.return_to_idle_state()
+
+
+
+def return_to_idle_state(self):
+    # driver or passenger
+
+    # Disable current ride
+    set_visible(self.btn_current, False)
+
+    # Enable ride
+    set_visible(self.btn_ride, True)
+    self.btn_ride.setChecked(True)
+
+
+    # Switch back to ride page
+    self.stack.setCurrentWidget(self.ride_page)
+    self.active_request_id = None
+
+    # clear chat/info
+    self.current_ride_page.chat_box.clear()
+    self.current_ride_page.info_label.setText("No active ride")
+
+    if self.chat_endpoint is not None:
         try:
-            print("send_chat_message: sending:", repr(text))
-            ep.send(text)
-            print("send_chat_message: send() returned OK")
-            return True
-        except Exception as e:
-            import traceback
-            print("send_chat_message: ERROR while sending:", e)
-            traceback.print_exc()
-            return False
+            self.chat_endpoint.close()
+        except Exception:
+            pass
+        self.chat_endpoint = None
+
+
+def on_driver_ride_accepted(self, request_id: str, payload: dict):
+    """
+    Called when THIS driver accepts a ride successfully.
+    We immediately go into 'current ride' state for the driver.
+    """
+    # Disable ride tab, enable Current Ride tab
+    set_visible(self.btn_ride, False)
+    set_visible(self.btn_current, True)
+
+    # Switch UI to Current Ride
+    self.btn_current.setChecked(True)
+    self.stack.setCurrentWidget(self.current_ride_page)
+
+    # Remember which request this ride is for (used by complete_ride)
+    self.active_request_id = request_id
+
+    # Build a payload compatible with load_for_driver
+    match_payload = dict(payload)
+    match_payload.setdefault("request_id", request_id)
+
+    passenger_info = payload.get("passenger_info", {})
+    self.other_party_name = passenger_info.get("name", "Them")
+
+    self.current_ride_page.load_for_driver(match_payload)
+
+def send_chat_message(self, text: str) -> bool:
+    """Send a chat message over the active P2P endpoint.
+
+    Returns True on success, False on failure.
+    Also prints the exception so we know what went wrong.
+    """
+    ep = getattr(self, "chat_endpoint", None)
+    if ep is None:
+        print("send_chat_message: no chat_endpoint")
+        return False
+
+    try:
+        print("send_chat_message: sending:", repr(text))
+        ep.send(text)
+        print("send_chat_message: send() returned OK")
+        return True
+    except Exception as e:
+        import traceback
+        print("send_chat_message: ERROR while sending:", e)
+        traceback.print_exc()
+        return False
 
 
 
