@@ -1,4 +1,3 @@
-#TEST
 import sys
 import traceback
 import json
@@ -23,12 +22,13 @@ import requests
 
 
 
-
 # ===== error popup for uncaught exceptions =====
 def excepthook(exc_type, exc, tb):
     traceback.print_exception(exc_type, exc, tb)
     QMessageBox.critical(None, "Unhandled Error", f"{exc_type.__name__}: {exc}")
 sys.excepthook = excepthook
+
+
 
 # ===== transport config =====
 HOST = "127.0.0.1"
@@ -36,13 +36,16 @@ PORT = 6000
 SOCKET_TIMEOUT = 4.0
 ENCODING = "utf-8"
 
+
+
 #==== weather api constants ======
 WEATHER_API_URL = "http://api.weatherapi.com/v1/current.json"
 WEATHER_API_KEY = "77ba44421ca942b892a154619252311"
 
+
+
 # ===== client helpers from client/net.py =====
 from client.net import send_json, recv_json
-
 def title_page(text):
     w = QWidget()
     v = QVBoxLayout(w)
@@ -54,7 +57,10 @@ def title_page(text):
     v.addStretch(1)
     return w
 
-#==== design =====
+
+
+# =============================================================================
+# design
 def apply_bento_theme(app: QApplication):
     app.setStyle("Fusion")  # more modern base style
 
@@ -254,10 +260,12 @@ def apply_bento_theme(app: QApplication):
         color: #e5e7eb;
     }
     """)
+# =============================================================================
 
-#====weather helpers ======
 
 
+# =============================================================================
+# weather helpers
 def fetch_weather_for_coords(lat, lon):
     if lat is None or lon is None:
         return None
@@ -285,11 +293,8 @@ def fetch_weather_for_coords(lat, lon):
     except Exception as e:
         print("Weather fetch failed:", e)
         return None
-
 def get_real_location():
     return 33.8938, 35.5018 #beirut loc
-
-
 def on_refresh_clicked(self):
     lat, lon = self._get_lat_lon()
     if lat is None or lon is None:
@@ -313,9 +318,7 @@ def on_refresh_clicked(self):
         self.lbl_icon.setPixmap(pix)
     except:
         pass
-
-
-
+# =============================================================================
 
 
 # ===== validation regex (mirror server) =====
@@ -323,9 +326,10 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$")
 PASSWORD_RE = re.compile(r"^.{6,20}$")
 EMAIL_RE    = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 
+
+
 # =============================================================================
-# Persistent JSONL session (one TCP connection per client after login)
-# =============================================================================
+#
 class JsonlSession(QObject):
     push_reveived = pyqtSignal(dict)
     def __init__(self, host: str, port: int, timeout: float = 4.0, parent=None):
@@ -390,9 +394,9 @@ class JsonlSession(QObject):
                 self.sock.close()
         finally:
             self.sock = None
-
 # =============================================================================
-# Register form (unchanged, one-shot call – safe pre-login)
+
+
 # =============================================================================
 class RegisterForm(QWidget):
     def __init__(self, session = None, parent=None):
@@ -583,11 +587,10 @@ class RegisterForm(QWidget):
             self.show_error(msg)
         else:
             self.show_error(f"Unexpected response: {rtype}")
-        
-        
-
 # =============================================================================
-# Login form (uses shared session so the socket remains bound post-login)
+
+
+
 # =============================================================================
 class LoginForm(QWidget):
     logged_in = pyqtSignal(dict)  # emits user_preview dict
@@ -663,9 +666,10 @@ class LoginForm(QWidget):
             self.show_error(payload.get("message","Unknown error"))
         else:
             self.show_error(f"Unexpected response: {rtype}")
-
 # =============================================================================
-# ProfileScreen
+
+
+
 # =============================================================================
 class ProfileScreen(QWidget):
     driverModeChanged = pyqtSignal(bool)  # emit after successful save
@@ -698,9 +702,9 @@ class ProfileScreen(QWidget):
         QLineEdit#profileField,
         QLineEdit#profileField:disabled,
         QLineEdit#profileField:read-only {
-            background-color: rgba(255,255,255,0.14);   /* brighter background */
-            border: 1px solid rgba(148,163,184,0.75);   /* stronger border */
-            color: #f9fafb;                              /* bright text */
+            background-color: rgba(255,255,255,0.14);
+            border: 1px solid rgba(148,163,184,0.75);  
+            color: #f9fafb;                             
         }
 
         QLineEdit#profileField:focus {
@@ -895,7 +899,8 @@ class ProfileScreen(QWidget):
         # Update the rating label
         self._update_rating_label()
 # =============================================================================
-# ScheduleScreen
+
+
 # =============================================================================
 class ScheduleScreen(QWidget):
     """Driver schedule CRUD using persistent TCP connection."""
@@ -1137,9 +1142,10 @@ class ScheduleScreen(QWidget):
             self.refresh()
         else:
             self.show_error(resp.get("payload", {}).get("message", "Failed to delete slot."))
-
 # =============================================================================
-# Passenger Ride Request Page
+
+
+
 # =============================================================================
 class RideRequestPage(QWidget):
     def __init__(self, session: JsonlSession, parent=None):
@@ -1436,11 +1442,12 @@ class RideRequestPage(QWidget):
             self.session.request(req)
         except Exception as e:
             print(f"poll_for_match error: {e}")
-
-# =============================================================================
-# Driver Ride Request Fullfuliment Page
 # =============================================================================
 
+
+
+# =============================================================================
+# requests table
 class DriverRidePage(QWidget):
     rideAccepted = pyqtSignal(str, dict)  # emit request_id when a ride is accepted
     def __init__(self, session: JsonlSession, parent=None):
@@ -1616,11 +1623,12 @@ class DriverRidePage(QWidget):
         if isinstance(val, (int, float)):
             return float(val)
         return None
+# =============================================================================
+
 
 
 # =============================================================================
-# Passenger/Driver Ride Completion Page
-# =============================================================================
+# from accepting ride until completion
 class CurrentRidePage(QWidget):
     def __init__(self, session, parent=None):
         super().__init__(parent)
@@ -1766,11 +1774,12 @@ class CurrentRidePage(QWidget):
             f"Driver matched!\nName: {name}\nCar: {model} ({color})\nPlate: {plate}"
         )
         self.complete_btn.hide()
+# =============================================================================
 
-#============
+
+
+# =============================================================================
 # rating
-# =============
-
 class StarRatingWidget(QWidget):
     ratingChanged = pyqtSignal(int)
 
@@ -1850,8 +1859,6 @@ class StarRatingWidget(QWidget):
 
     def rating(self) -> int:
         return self._rating
-
-
 class RatingDialog(QDialog):
     def __init__(self, parent=None, title="Rate your ride", subtitle="How was your ride experience?"):
         super().__init__(parent)
@@ -1928,11 +1935,9 @@ class RatingDialog(QDialog):
         if result == QDialog.Accepted:
             return self.star_widget.rating()
         return None
+# =============================================================================
 
 
-# =============================================================================
-# Main window: wires everything together
-# =============================================================================
 class MainWindow(QMainWindow):
     incoming_p2p_connection = pyqtSignal(object, tuple)
     def __init__(self):
@@ -2510,16 +2515,6 @@ class MainWindow(QMainWindow):
             print("send_chat_message: ERROR while sending:", e)
             traceback.print_exc()
             return False
-
-
-
-
-
-
-
-
-
-
 def main():
     app = QApplication(sys.argv)
     apply_bento_theme(app)

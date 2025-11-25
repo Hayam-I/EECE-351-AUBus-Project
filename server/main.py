@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 AUBus – Server
 -------------------------------------------
@@ -206,9 +205,6 @@ def _minutes_from_iso(iso_s: str) -> tuple[int, int]:
     minutes = dt.hour * 60 + dt.minute
     return sun0, minutes
 
-def _now_iso() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
 #going from req_123 -> 123
 def _reqid_to_int(req_id: str) -> int | None:
     if isinstance(req_id, str) and req_id.startswith("req_"):
@@ -220,7 +216,7 @@ def _reqid_to_int(req_id: str) -> int | None:
 
 def _normalize_peer_endpoint(conn_state: dict, announced_port: int | None) -> tuple[str | None, int | None]:
     """
-     Choose the best (ip, port) we can give to the passenger for P2P bootstrap.
+     Choose the best (ip, port) we can give to the passenger for P2P connection.
     - IP is always the server-observed remote IP from this TCP connection.
     - Port is driver's explicitly announced P2P port if valid, else None.
     """
@@ -488,7 +484,6 @@ def schedule_set(conn_state, payload, mid):
             "payload": {"code": "SERVER_ERROR", "message": "Failed to set schedule"},
         }
 
-
 def schedule_get(conn_state, payload, mid):
     uid, err = require_logged_in(conn_state, mid)
     if err: return err
@@ -674,7 +669,7 @@ def _broadcast_driver_candidates(request_id: str, passenger_preview: dict, candi
 
     return sent
 
-
+#completed ride
 def _notify_request_closed(request_id: str, winner_uid: int, remaining: set[int]):
     targets = []
     with STATE_LOCK:
@@ -704,7 +699,6 @@ def _driver_has_active_match(driver_id: int) -> bool:
     except Exception:
         logging.exception("_driver_has_active_match failed")
         return True
-        
 
 def _ride_accept(conn_state, payload, mid):
     driver_id, err = require_logged_in(conn_state, mid)
@@ -1043,7 +1037,6 @@ def _ride_rate(conn_state, payload, mid):
                 "payload": {"code": "SERVER_ERROR",
                             "message": "failed to record rating"}}
 
-
 def _cancel_active_matches_for_driver(driver_id: int):
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -1082,19 +1075,6 @@ def _passenger_has_active_request(user_id: int) -> bool:
         return True
 
 
-
-# ---------------------------------------------------------
-# Dispatcher (takes per-connection state) (NOT UP TO DATE!!)
-# Validates 'type' and 'id'
-    # mtype switch:
-    # - "PING" → PONG
-    # - "AUTH.REGISTER_REQ" → register_user(...)
-    # - "AUTH.LOGIN_REQ"    → login_user(...) and bind conn_state["user_id"]
-    # - "AUTH.LOGOUT_REQ"   → clears conn_state["user_id"]
-    # - "PROFILE.SET_REQ"   → requires login
-    # - "PROFILE.GET_REQ"   → requires login (or explicit user_id payload) 
-    # otherwise → ERROR: UNKNOWN_TYPE
-# ---------------------------------------------------------
 
 def handle_message(msg: dict, conn_state: dict):
     if "type" not in msg or "id" not in msg:
