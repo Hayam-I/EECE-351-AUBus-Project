@@ -896,6 +896,26 @@ class ProfileScreen(QWidget):
         self.chk_driver = QCheckBox("Driver Mode")
         self.chk_driver.setChecked(self.snapshot["is_driver"])
 
+        # Stronger style just for the 3 profile fields bc i cant figure out where you put the styling for them joe T_T
+        profile_field_css = """
+        QLineEdit#profileField,
+        QLineEdit#profileField:disabled,
+        QLineEdit#profileField:read-only {
+            background-color: rgba(255,255,255,0.14);
+            border: 1px solid rgba(148,163,184,0.75);  
+            color: #f9fafb;                             
+        }
+
+        QLineEdit#profileField:focus {
+            border: 1px solid #6366f1;
+            background-color: rgba(255,255,255,0.18);
+        }
+        """
+
+        self.in_name.setStyleSheet(profile_field_css)
+        self.in_email.setStyleSheet(profile_field_css)
+        self.in_area.setStyleSheet(profile_field_css)
+
 
         for w in (self.in_name, self.in_email, self.in_area):
             w.setMinimumWidth(300); w.setMaximumWidth(420)
@@ -1076,8 +1096,8 @@ class ProfileScreen(QWidget):
 
 
         # Update the rating label
-        self._update_rating_label()# =============================================================================
-
+        self._update_rating_label()
+# =============================================================================
 
 
 # =============================================================================
@@ -2244,9 +2264,29 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ auth / profile / driver mode
     def after_login(self, user_preview: dict):
+        if not isinstance(user_preview, dict):
+            user_preview = {}
+
+        print("MainWindow.after_login: initial user_preview =", user_preview)
+
+        # 1) Ask server for the latest profile (so we always get name/area/email/is_driver)
+        try:
+            resp = self.session.request({
+                "type": "PROFILE.GET_REQ",
+                "id": str(uuid.uuid4()),
+                "payload": {}
+            })
+            if resp.get("type") == "PROFILE.GET_RES":
+                prof = resp.get("payload", {}) or {}
+                # merge into user_preview, server data wins
+                user_preview.update(prof)
+                print("PROFILE.GET_RES merged into user_preview:", user_preview)
+        except Exception as e:
+            print("PROFILE.GET_REQ failed:", e)
+
+        # 2) Store and build ProfileScreen from this enriched dict
         self.user_preview = user_preview
 
-        # Profile screen
         profile = ProfileScreen(self.session, user_preview)
         profile.driverModeChanged.connect(self.on_driver_mode_changed)
 
@@ -2255,15 +2295,13 @@ class MainWindow(QMainWindow):
         self.profile_page = profile
         self.stack.insertWidget(0, self.profile_page)
 
-        # we now know user role, so enable Schedule
-        self.set_schedule_enabled(True)
-
-        is_driver = bool(user_preview.get("is_driver", False))
-        self.on_driver_mode_changed(is_driver)
-
+        # schedule pages etc. (keep your existing logic here)
+        # ...
+        # finally:
         self.root.setCurrentWidget(self.app_page)
         self.stack.setCurrentWidget(self.profile_page)
         self.btn_profile.setChecked(True)
+
 
     def on_driver_mode_changed(self, is_driver: bool):
         # P2P listener follows driver mode
