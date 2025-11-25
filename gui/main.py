@@ -860,7 +860,7 @@ class LoginForm(QWidget):
 
         if resp.get("type") == "AUTH.LOGIN_RES":
             payload = resp.get("payload", {})
-            self.logged_in.emit(payload.get("user_preview", {}))
+            self.logged_in.emit(payload.get("user", {}))
             self.err.setVisible(False)
         else:
             msg = resp.get("payload", {}).get("message", "Login failed.")
@@ -895,26 +895,6 @@ class ProfileScreen(QWidget):
         self.in_area.setObjectName("profileField")
         self.chk_driver = QCheckBox("Driver Mode")
         self.chk_driver.setChecked(self.snapshot["is_driver"])
-
-        # Stronger style just for the 3 profile fields bc i cant figure out where you put the styling for them joe T_T
-        profile_field_css = """
-        QLineEdit#profileField,
-        QLineEdit#profileField:disabled,
-        QLineEdit#profileField:read-only {
-            background-color: rgba(255,255,255,0.14);
-            border: 1px solid rgba(148,163,184,0.75);  
-            color: #f9fafb;                             
-        }
-
-        QLineEdit#profileField:focus {
-            border: 1px solid #6366f1;
-            background-color: rgba(255,255,255,0.18);
-        }
-        """
-
-        self.in_name.setStyleSheet(profile_field_css)
-        self.in_email.setStyleSheet(profile_field_css)
-        self.in_area.setStyleSheet(profile_field_css)
 
 
         for w in (self.in_name, self.in_email, self.in_area):
@@ -2264,12 +2244,16 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ auth / profile / driver mode
     def after_login(self, user_preview: dict):
+        """
+        Called when LoginForm emits logged_in(user_preview).
+        We immediately fetch the full profile from the server so that
+        name/email/area/is_driver are always populated, then rebuild
+        the ProfileScreen and apply driver/passenger mode.
+        """
         if not isinstance(user_preview, dict):
             user_preview = {}
 
-        print("MainWindow.after_login: initial user_preview =", user_preview)
-
-        # 1) Ask server for the latest profile (so we always get name/area/email/is_driver)
+        # --- 1) Ask server for the full profile, merge into user_preview ---
         try:
             resp = self.session.request({
                 "type": "PROFILE.GET_REQ",
@@ -2278,26 +2262,30 @@ class MainWindow(QMainWindow):
             })
             if resp.get("type") == "PROFILE.GET_RES":
                 prof = resp.get("payload", {}) or {}
-                # merge into user_preview, server data wins
                 user_preview.update(prof)
-                print("PROFILE.GET_RES merged into user_preview:", user_preview)
         except Exception as e:
             print("PROFILE.GET_REQ failed:", e)
 
-        # 2) Store and build ProfileScreen from this enriched dict
+        # cache it
         self.user_preview = user_preview
+        is_driver = bool(user_preview.get("is_driver", False))
 
-        profile = ProfileScreen(self.session, user_preview)
-        profile.driverModeChanged.connect(self.on_driver_mode_changed)
+        # --- 2) Rebuild the Profile screen with the fresh data ---
+        if hasattr(self, "profile_page") and self.profile_page is not None:
+            self.stack.removeWidget(self.profile_page)
+            self.profile_page.deleteLater()
 
-        self.stack.removeWidget(self.profile_page)
-        self.profile_page.deleteLater()
-        self.profile_page = profile
+        self.profile_page = ProfileScreen(self.session, user_preview)
+        self.profile_page.driverModeChanged.connect(self.on_driver_mode_changed)
         self.stack.insertWidget(0, self.profile_page)
 
-        # schedule pages etc. (keep your existing logic here)
-        # ...
-        # finally:
+        # --- 3) Apply driver / passenger mode (wires schedule + ride pages) ---
+        self.on_driver_mode_changed(is_driver)
+
+        # ✅ IMPORTANT: re-enable the Schedule button after login
+        self.set_schedule_enabled(True)
+
+        # --- 4) Switch to the main app UI ---
         self.root.setCurrentWidget(self.app_page)
         self.stack.setCurrentWidget(self.profile_page)
         self.btn_profile.setChecked(True)
