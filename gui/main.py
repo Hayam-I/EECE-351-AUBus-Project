@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog
+    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QFrame
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject, QPointF
 from PyQt5.QtGui import QTextCursor, QPixmap, QIcon, QPolygonF, QColor, QPainter
@@ -61,205 +61,409 @@ def title_page(text):
 
 # =============================================================================
 # design
-def apply_bento_theme(app: QApplication):
-    app.setStyle("Fusion")  # more modern base style
+DARK_STYLESHEET = """
+QMainWindow#MainWindow, QWidget {
+    background-color: #020617;
+    color: #e5e7eb;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 10pt;
+}
 
-    app.setStyleSheet("""
-    /* ====== Global background ====== */
-    QMainWindow#MainWindow, QWidget {
-        background-color: #020617; /* very dark navy */
-        color: #e5e7eb;
-        font-family: "Segoe UI", system-ui, sans-serif;
-        font-size: 10pt;
-    }
+/* Sidebar */
+QWidget#SideBar {
+    background-color: #020617;
+    border-right: 1px solid #111827;
+}
 
-    /* ====== Sidebar ====== */
-    QWidget#SideBar {
-        background-color: #020617;
-        border-right: 1px solid #1f2937;
-    }
+QWidget#SideBar QPushButton {
+    background-color: transparent;
+    border: none;
+    color: #9ca3af;
+    padding: 8px 14px;
+    text-align: left;
+    border-radius: 10px;
+}
 
-    QWidget#SideBar QPushButton {
-        background-color: transparent;
-        border: none;
-        color: #9ca3af;
-        padding: 8px 14px;
-        text-align: left;
-        border-radius: 10px;
-    }
+QWidget#SideBar QPushButton:hover {
+    background-color: rgba(129,140,248,0.25);
+    color: #e5e7eb;
+}
 
-    QWidget#SideBar QPushButton:hover {
-        background-color: rgba(99,102,241,0.18); /* soft indigo */
-        color: #e5e7eb;
-    }
+QWidget#SideBar QPushButton:checked {
+    background-color: #4f46e5;
+    color: #f9fafb;
+}
 
-    QWidget#SideBar QPushButton:checked {
-        background-color: #4f46e5; /* primary indigo */
-        color: #f9fafb;
-    }
+/* Cards */
+QWidget#login_card, QWidget#register_card {
+    background-color: #020617;
+    border-radius: 18px;
+    border: 1px solid rgba(148,163,184,0.45);
+}
 
-    /* ====== Cards / panels ====== */
-    QStackedWidget, QWidget#login_card, QWidget#register_card {
-        background-color: #020617;
-        border-radius: 18px;
-    }
+/* Inputs */
+QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
+    background-color: rgba(15,23,42,0.85);
+    border: 1px solid rgba(148,163,184,0.45);
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: #e5e7eb;
+}
 
-    QWidget#login_card, QWidget#register_card {
-        border: 1px solid rgba(148,163,184,0.35);
-        background-color: qlineargradient(
-            x1:0, y1:0, x2:1, y2:1,
-            stop:0 #020617,
-            stop:1 #020617
-        );
-    }
-    
-    QLabel {
-        color: #e5e7eb;
-        background-color: transparent;   /* <<< this removes the black box */
-        border: none;
-    }
+QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
+    border: 1px solid #6366f1;
+    background-color: rgba(15,23,42,1.0);
+}
 
-    QLabel#page_title {
-        font-size: 18pt;
-        font-weight: 600;
-        color: #e5e7eb;
-    }
+/* Buttons */
+QPushButton {
+    background-color: #111827;
+    color: #e5e7eb;
+    border-radius: 10px;
+    padding: 6px 14px;
+    border: 1px solid #1f2937;
+}
 
-    /* ====== Inputs ====== */
-    QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
-        background-color: rgba(255,255,255,0.04);
-        border: 1px solid rgba(148,163,184,0.25); 
-        border-radius: 8px;
-        padding: 6px 10px;
-        color: #e5e7eb;
-        selection-background-color: #4f46e5;
-        selection-color: #f9fafb;
-    }
-                      
+QPushButton:hover {
+    background-color: #1f2937;
+    border-color: #4b5563;
+}
 
-    QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
-        border: 1px solid #6366f1;
-        background-color: rgba(255,255,255,0.07);
-    }
+QPushButton:pressed {
+    background-color: #4f46e5;
+    border-color: #4f46e5;
+    color: #f9fafb;
+}
 
-    QComboBox QAbstractItemView {
-        background-color: #020617;
-        border: 1px solid #1f2937;
-        selection-background-color: #4f46e5;
-        selection-color: #f9fafb;
-    }
+QPushButton:disabled {
+    background-color: #020617;
+    color: #4b5563;
+    border-color: #111827;
+}
 
-    /* ====== Primary / secondary buttons ====== */
-    QPushButton {
-        background-color: #111827;
-        color: #e5e7eb;
-        border-radius: 10px;
-        padding: 6px 14px;
-        border: 1px solid #1f2937;
-    }
+/* Tables */
+QTableWidget {
+    background-color: #020617;
+    border: 1px solid #111827;
+    border-radius: 14px;
+    gridline-color: #111827;
+    selection-background-color: rgba(129,140,248,0.30);
+    selection-color: #f9fafb;
+}
 
-    QPushButton:hover {
-        background-color: #1f2937;
-        border-color: #4b5563;
-    }
+QHeaderView::section {
+    background-color: #020617;
+    color: #9ca3af;
+    padding: 6px 8px;
+    border: none;
+    border-bottom: 1px solid #111827;
+}
 
-    QPushButton:pressed {
-        background-color: #4f46e5;
-        border-color: #4f46e5;
-        color: #f9fafb;
-    }
+/* Tabs */
+QTabWidget::pane {
+    border: 1px solid #111827;
+    border-radius: 14px;
+    background-color: #020617;
+}
 
-    QPushButton:disabled {
-        background-color: #020617;
-        color: #4b5563;
-        border-color: #111827;
-    }
+QTabBar::tab {
+    background-color: transparent;
+    color: #9ca3af;
+    padding: 6px 16px;
+    border-radius: 10px;
+    margin: 4px;
+}
 
-    /* ====== Tables ====== */
-    QTableWidget {
-        background-color: #020617;
-        alternate-background-color: #020617;
-        border: 1px solid #111827;
-        border-radius: 14px;
-        gridline-color: #111827;
-        selection-background-color: rgba(129,140,248,0.25);
-        selection-color: #f9fafb;
-    }
+QTabBar::tab:selected {
+    background-color: #4f46e5;
+    color: #f9fafb;
+}
 
-    QHeaderView::section {
-        background-color: #020617;
-        color: #9ca3af;
-        padding: 6px 8px;
-        border: none;
-        border-bottom: 1px solid #111827;
-    }
+QTabBar::tab:hover {
+    background-color: rgba(79,70,229,0.25);
+    color: #e5e7eb;
+}
 
-    QTableCornerButton::section {
-        background-color: #020617;
-        border: none;
-    }
+/* ---------- Auth card (dark) ---------- */
+QFrame#AuthCard {
+    /* pretty gradient card */
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #0f172a,
+        stop:0.35 #111827,
+        stop:1 #1f1b3f
+    );
+    border-radius: 18px;
+    padding: 18px 22px;
+    border: 1px solid rgba(148,163,184,0.55);
+}
 
-    /* Scrollbars (subtle) */
-    QScrollBar:vertical, QScrollBar:horizontal {
-        background: #020617;
-        border-radius: 4px;
-        width: 10px;
-        height: 10px;
-        margin: 2px;
-    }
+/* make everything inside the card transparent by default */
+QFrame#AuthCard * {
+    background: transparent;
+}
 
-    QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-        background: #111827;
-        border-radius: 4px;
-    }
+/* title */
+QLabel#AuthTitle {
+    font-size: 16px;
+    font-weight: 600;
+    color: #e5e7eb;
+}
 
-    QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-        background: #4b5563;
-    }
+/* generic labels – no box behind text */
+QFrame#AuthCard QLabel {
+    color: #e5e7eb;
+}
 
-    QScrollBar::add-line, QScrollBar::sub-line {
-        width: 0;
-        height: 0;
-        background: transparent;
-    }
+/* input fields: the ONLY things with a background */
+QLineEdit#AuthField {
+    background-color: rgba(15,23,42,0.92);
+    border-radius: 10px;
+    padding: 6px 10px;
+    border: 1px solid rgba(148,163,184,0.8);
+    color: #f9fafb;
+}
+QLineEdit#AuthField:focus {
+    border-color: #6366f1;
+    background-color: rgba(15,23,42,1.0);
+}
 
-    /* Status labels */
-    QLabel {
-        color: #e5e7eb;
-    }
+/* primary button */
+QPushButton#AuthPrimaryButton {
+    margin-top: 8px;
+    padding: 6px 14px;
+    border-radius: 12px;
+    background-color: #6366f1;
+    color: #020617;
+    font-weight: 600;
+    border: none;
+}
+QPushButton#AuthPrimaryButton:hover {
+    background-color: #3f43ee;
+}
 
-    QLabel[style*="color: red"] {
-        color: #f97373;
-    }
+/* error text */
+QLabel#AuthError {
+    color: #f97373;
+    font-size: 9pt;
+}
 
-    QLabel[style*="#0a7a0a"] {
-        color: #4ade80;
-    }
+/* Profile fields – dark mode */
+QLineEdit#profileField,
+QLineEdit#profileField:disabled,
+QLineEdit#profileField:read-only {
+    background-color: rgba(255,255,255,0.10);
+    border: 1px solid rgba(148,163,184,0.55);
+    color: #f9fafb;
+}
+QLineEdit#profileField:focus {
+    border: 1px solid #6366f1;
+    background-color: rgba(255,255,255,0.15);
+}
+"""
 
-    QTabWidget::pane {
-        border: 1px solid #111827;
-        border-radius: 14px;
-        background-color: #020617;
-    }
+LIGHT_STYLESHEET = """
+QMainWindow#MainWindow, QWidget {
+    background-color: #fff5e9;   /* warm cream */
+    color: #3f3a32;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 10pt;
+}
 
-    QTabBar::tab {
-        background-color: transparent;
-        color: #9ca3af;
-        padding: 6px 16px;
-        border-radius: 10px;
-        margin: 4px;
-    }
+/* Sidebar */
+QWidget#SideBar {
+    background-color: #f1dfca;
+    border-right: 1px solid #e0cbb1;
+}
 
-    QTabBar::tab:selected {
-        background-color: #4f46e5;
-        color: #f9fafb;
-    }
+QWidget#SideBar QPushButton {
+    background-color: transparent;
+    border: none;
+    color: #6b5b4b;
+    padding: 8px 14px;
+    text-align: left;
+    border-radius: 10px;
+}
 
-    QTabBar::tab:hover {
-        background-color: rgba(79,70,229,0.25);
-        color: #e5e7eb;
-    }
-    """)
+QWidget#SideBar QPushButton:hover {
+    background-color: rgba(178,132,91,0.16);
+    color: #3f3a32;
+}
+
+QWidget#SideBar QPushButton:checked {
+    background-color: #b8845b;
+    color: #fffaf3;
+}
+
+/* Cards */
+QWidget#login_card, QWidget#register_card {
+    background-color: #fffaf3;
+    border-radius: 18px;
+    border: 1px solid #e0cbb1;
+}
+
+/* Inputs */
+QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
+    background-color: #fffaf3;
+    border: 1px solid #e1cdb5;
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: #3f3a32;
+}
+
+QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
+    border: 1px solid #c27b4f;
+    background-color: #fffdf7;
+}
+
+/* Buttons */
+QPushButton {
+    background-color: #f1dfca;
+    color: #3f3a32;
+    border-radius: 10px;
+    padding: 6px 14px;
+    border: 1px solid #ddc3a6;
+}
+
+QPushButton:hover {
+    background-color: #e7cfb7;
+    border-color: #cda57e;
+}
+
+QPushButton:pressed {
+    background-color: #c27b4f;
+    border-color: #c27b4f;
+    color: #fffaf3;
+}
+
+QPushButton:disabled {
+    background-color: #f5e6d4;
+    color: #b39a7b;
+    border-color: #e3cfb3;
+}
+
+/* Tables */
+QTableWidget {
+    background-color: #fffaf3;
+    border: 1px solid #e3cfb3;
+    border-radius: 14px;
+    gridline-color: #e3cfb3;
+    selection-background-color: rgba(194,123,79,0.20);
+    selection-color: #3f3a32;
+}
+
+QHeaderView::section {
+    background-color: #f5e6d4;
+    color: #7a6a59;
+    padding: 6px 8px;
+    border: none;
+    border-bottom: 1px solid #e3cfb3;
+}
+
+/* Tabs */
+QTabWidget::pane {
+    border: 1px solid #e3cfb3;
+    border-radius: 14px;
+    background-color: #fffaf3;
+}
+
+QTabBar::tab {
+    background-color: transparent;
+    color: #7a6a59;
+    padding: 6px 16px;
+    border-radius: 10px;
+    margin: 4px;
+}
+
+QTabBar::tab:selected {
+    background-color: #c27b4f;
+    color: #fffaf3;
+}
+
+QTabBar::tab:hover {
+    background-color: rgba(194,123,79,0.18);
+    color: #3f3a32;
+}
+
+
+/* ---------- Auth card (light) ---------- */
+QFrame#AuthCard {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #fff2de,
+        stop:0.5 #fde4c7,
+        stop:1 #1f2344
+    );
+    border-radius: 18px;
+    padding: 18px 22px;
+    border: 1px solid rgba(200,160,120,0.55);
+}
+
+/* everything inside card is see-through unless we say otherwise */
+QFrame#AuthCard * {
+    background: transparent;
+}
+
+/* title */
+QLabel#AuthTitle {
+    font-size: 16px;
+    font-weight: 600;
+    color: #1f2933;
+}
+
+/* labels – no box */
+QFrame#AuthCard QLabel {
+    color: #3f3f46;
+}
+
+/* inputs – soft beige pill instead of plain white brick */
+QLineEdit#AuthField {
+    background-color: #fffaf3;
+    border-radius: 10px;
+    padding: 6px 10px;
+    border: 1px solid rgba(200,160,120,0.9);
+    color: #111827;
+}
+QLineEdit#AuthField:focus {
+    border-color: #f97316;
+    background-color: #fff3e0;
+}
+
+/* primary button */
+QPushButton#AuthPrimaryButton {
+    margin-top: 8px;
+    padding: 6px 14px;
+    border-radius: 12px;
+    background-color: #fec89a;
+    color: #111827;
+    font-weight: 600;
+    border: none;
+}
+QPushButton#AuthPrimaryButton:hover {
+    background-color: #ffb37a;
+}
+
+/* error text */
+QLabel#AuthError {
+    color: #b91c1c;
+    font-size: 9pt;
+}
+
+/* Profile fields – light mode */
+QLineEdit#profileField,
+QLineEdit#profileField:disabled,
+QLineEdit#profileField:read-only {
+    background-color: #fff7eb;
+    border: 1px solid #e6c8a0;
+    color: #1f2937;
+}
+QLineEdit#profileField:focus {
+    border: 1px solid #d97706;
+    background-color: #fff3e0;
+}
+
+"""
+
 # =============================================================================
 
 
@@ -436,19 +640,6 @@ class RegisterForm(QWidget):
 
         card = QWidget()
         card.setObjectName("register_card")
-        card.setStyleSheet("""
-            QWidget#register_card {
-                background-color: qradialgradient(
-                    cx:0.1, cy:0.0, radius:1.4,
-                    fx:0.0, fy:0.0,
-                    stop:0  rgba(129,140,248,0.25),
-                    stop:0.4 rgba(24,31,81,0.90),
-                    stop:1  #020617
-                );
-                border-radius: 20px;
-                border: 1px solid rgba(148,163,184,0.45);
-            }
-        """)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(30, 20, 30, 20)
         lay.setSpacing(15)
@@ -593,79 +784,87 @@ class RegisterForm(QWidget):
 
 # =============================================================================
 class LoginForm(QWidget):
-    logged_in = pyqtSignal(dict)  # emits user_preview dict
+    logged_in = pyqtSignal(dict)
 
     def __init__(self, session: JsonlSession, parent=None):
         super().__init__(parent)
         self.session = session
 
-        self.in_username = QLineEdit()
-        self.in_password = QLineEdit(); self.in_password.setEchoMode(QLineEdit.Password)
-        for w in (self.in_username, self.in_password): w.setMinimumWidth(250); w.setMaximumWidth(400)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setAlignment(Qt.AlignCenter)
+
+        card = QFrame()
+        card.setObjectName("AuthCard")
+        card.setFixedWidth(420)
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(32, 28, 32, 28)
+        card_layout.setSpacing(16)
+
+        title = QLabel("Log into account")
+        title.setObjectName("AuthTitle")
+        card_layout.addWidget(title, 0, Qt.AlignHCenter)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
-        form.setFormAlignment(Qt.AlignHCenter | Qt.AlignCenter)
-        form.setContentsMargins(0,20,0,0)
-        form.setHorizontalSpacing(15); form.setVerticalSpacing(10)
-        form.addRow("Username:", self.in_username)
-        form.addRow("Password:", self.in_password)
+        form.setFormAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
 
-        self.err = QLabel(""); self.err.setWordWrap(True); self.err.setStyleSheet("color: red;"); self.err.setVisible(False)
-        self.btn_login = QPushButton("Log into account"); self.btn_login.setMinimumWidth(120)
-        self.btn_login.clicked.connect(self.on_submit)
+        self.in_user = QLineEdit()
+        self.in_user.setObjectName("AuthField")
+        self.in_pass = QLineEdit()
+        self.in_pass.setObjectName("AuthField")
+        self.in_pass.setEchoMode(QLineEdit.Password)
 
-        card = QWidget()
-        card.setObjectName("login_card")
-        card.setStyleSheet("""
-            QWidget#login_card {
-                background-color: qradialgradient(
-                    cx:0.9, cy:0.0, radius:1.4,
-                    fx:1.0, fy:0.0,
-                    stop:0  rgba(236,72,153,0.25),
-                    stop:0.4 rgba(24,31,81,0.90),
-                    stop:1  #020617
-                );
-                border-radius: 20px;
-                border: 1px solid rgba(148,163,184,0.45);
-            }
-        """)
-        lay = QVBoxLayout(card); lay.setContentsMargins(30,20,30,20); lay.setSpacing(15)
-        lay.addLayout(form); lay.addWidget(self.err); lay.addSpacing(8); lay.addWidget(self.btn_login,0,Qt.AlignHCenter)
+        form.addRow("Username:", self.in_user)
+        form.addRow("Password:", self.in_pass)
 
-        root = QVBoxLayout(self); root.setContentsMargins(0,0,0,0)
-        root.addStretch(1); root.addWidget(card,0,Qt.AlignHCenter); root.addStretch(1)
+        card_layout.addLayout(form)
 
-    def show_error(self, msg): self.err.setText(msg); self.err.setVisible(True)
-    def clear_error(self): self.err.setText(""); self.err.setVisible(False)
+        self.err = QLabel("")
+        self.err.setWordWrap(True)
+        self.err.setObjectName("AuthError")
+        self.err.setVisible(False)
+        card_layout.addWidget(self.err)
 
-    def validate(self):
-        u = self.in_username.text().strip()
-        p = self.in_password.text().strip()
-        if not u or not USERNAME_RE.match(u): return False, "Username is required."
-        if not p or not PASSWORD_RE.match(p): return False, "Password is required."
-        return True, {"username":u, "password":p}
+        self.btn_login = QPushButton("Log into account")
+        self.btn_login.setObjectName("AuthPrimaryButton")
+        self.btn_login.clicked.connect(self.on_login)
+        card_layout.addWidget(self.btn_login)
 
-    def on_submit(self):
-        self.clear_error()
-        ok, payload_or_msg = self.validate()
-        if not ok:
-            self.show_error(payload_or_msg); return
-        req = {"type":"AUTH.LOGIN_REQ","id":str(uuid.uuid4()),"payload":payload_or_msg}
+        outer.addWidget(card, 0, Qt.AlignCenter)
+
+    def show_error(self, msg: str):
+        self.err.setText(msg)
+        self.err.setVisible(True)
+
+    def on_login(self):
+        u = self.in_user.text().strip()
+        p = self.in_pass.text().strip()
+        if not u or not p:
+            self.show_error("Username and password are required.")
+            return
+
+        req = {
+            "type": "AUTH.LOGIN_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {"username": u, "password": p},
+        }
         try:
-            resp = self.session.request(req)  # same socket stays open
+            resp = self.session.request(req)
         except Exception as e:
-            self.show_error(f"Network error: {e}"); return
-        rtype = resp.get("type")
-        payload = resp.get("payload",{})
-        if rtype == "AUTH.LOGIN_RES":
-            user_preview = payload.get("user", {})
-            self.logged_in.emit(user_preview)
-            self.in_username.clear(); self.in_password.clear()
-        elif rtype == "ERROR":
-            self.show_error(payload.get("message","Unknown error"))
+            self.show_error(f"Network error: {e}")
+            return
+
+        if resp.get("type") == "AUTH.LOGIN_RES":
+            payload = resp.get("payload", {})
+            self.logged_in.emit(payload.get("user_preview", {}))
+            self.err.setVisible(False)
         else:
-            self.show_error(f"Unexpected response: {rtype}")
+            msg = resp.get("payload", {}).get("message", "Login failed.")
+            self.show_error(msg)
 # =============================================================================
 
 
@@ -696,26 +895,6 @@ class ProfileScreen(QWidget):
         self.in_area.setObjectName("profileField")
         self.chk_driver = QCheckBox("Driver Mode")
         self.chk_driver.setChecked(self.snapshot["is_driver"])
-
-        # Stronger style just for the 3 profile fields bc i cant figure out where you put the styling for them joe T_T
-        profile_field_css = """
-        QLineEdit#profileField,
-        QLineEdit#profileField:disabled,
-        QLineEdit#profileField:read-only {
-            background-color: rgba(255,255,255,0.14);
-            border: 1px solid rgba(148,163,184,0.75);  
-            color: #f9fafb;                             
-        }
-
-        QLineEdit#profileField:focus {
-            border: 1px solid #6366f1;
-            background-color: rgba(255,255,255,0.18);
-        }
-        """
-
-        self.in_name.setStyleSheet(profile_field_css)
-        self.in_email.setStyleSheet(profile_field_css)
-        self.in_area.setStyleSheet(profile_field_css)
 
 
         for w in (self.in_name, self.in_email, self.in_area):
@@ -897,11 +1076,12 @@ class ProfileScreen(QWidget):
 
 
         # Update the rating label
-        self._update_rating_label()
-# =============================================================================
+        self._update_rating_label()# =============================================================================
 
 
+
 # =============================================================================
+#driver
 class ScheduleScreen(QWidget):
     """Driver schedule CRUD using persistent TCP connection."""
     def __init__(self, session: JsonlSession, parent=None):
@@ -924,7 +1104,6 @@ class ScheduleScreen(QWidget):
         self.cb_direction.addItems(["to_AUB", "from_AUB"])
         self.cb_direction.currentTextChanged.connect(self._update_direction_hints)
 
-
         self.in_area = QLineEdit()
         self.in_area.setPlaceholderText("e.g Hamra")
 
@@ -935,7 +1114,6 @@ class ScheduleScreen(QWidget):
         self.btn_add.clicked.connect(self.on_add_slot)
 
         self._update_direction_hints()
-
 
         for w in (self.cb_weekday, self.time_edit, self.cb_direction, self.in_area,
                   self.btn_pick_location, self.btn_add):
@@ -971,8 +1149,6 @@ class ScheduleScreen(QWidget):
         root.addWidget(self.err)
         root.addWidget(self.ok)
         root.addSpacing(8)
-
-        
         root.addWidget(self.table, 1)
         root.addLayout(btns)
 
@@ -981,8 +1157,6 @@ class ScheduleScreen(QWidget):
     # ---- map picking ----
     def open_map(self):
         dlg = MapSelector(self)
-
-        # (optional) tweak text based on direction
         direction = self.cb_direction.currentText()
         if direction == "to_AUB":
             dlg.setWindowTitle("Select your pickup location")
@@ -990,9 +1164,8 @@ class ScheduleScreen(QWidget):
         else:
             dlg.setWindowTitle("Select your drop-off location")
             dlg.label.setText("Try to approximately locate where you will be dropped off.")
-
         dlg.location_selected.connect(self.on_location_picked)
-        dlg.showMaximized()   # important: so showEvent sees the max size
+        dlg.showMaximized()
         dlg.exec_()
 
     def on_location_picked(self, lat, lon):
@@ -1016,18 +1189,15 @@ class ScheduleScreen(QWidget):
 
     def _time_str(self):
         return self.time_edit.time().toString("HH:mm")
-    
+
     def _update_direction_hints(self):
         direction = self.cb_direction.currentText()
         if direction == "to_AUB":
-            # Driver is going TO campus; pin = origin
             self.in_area.setPlaceholderText("From where are you driving? (e.g. Hamra)")
             self.btn_pick_location.setText("Pick starting point on map")
         else:
-            # Driver is leaving AUB; pin = destination
             self.in_area.setPlaceholderText("Where are you dropping off? (e.g. Hamra)")
             self.btn_pick_location.setText("Pick drop-off area on map")
-
 
     # ---- CRUD ----
     def refresh(self):
@@ -1038,11 +1208,7 @@ class ScheduleScreen(QWidget):
             if item0 is not None:
                 selected_sched_id = item0.data(Qt.UserRole)
 
-        req = {
-            "type": "SCHEDULE.LIST_REQ",
-            "id": str(uuid.uuid4()),
-            "payload": {}
-        }
+        req = {"type": "SCHEDULE.LIST_REQ", "id": str(uuid.uuid4()), "payload": {}}
         try:
             resp = self.session.request(req)
         except Exception as e:
@@ -1130,6 +1296,7 @@ class ScheduleScreen(QWidget):
         if not isinstance(sid, int):
             self.show_error("Internal error: missing schedule_id.")
             return
+
         req = {"type": "SCHEDULE.REMOVE_REQ", "id": str(uuid.uuid4()), "payload": {"schedule_id": sid}}
         try:
             resp = self.session.request(req)
@@ -1142,6 +1309,21 @@ class ScheduleScreen(QWidget):
             self.refresh()
         else:
             self.show_error(resp.get("payload", {}).get("message", "Failed to delete slot."))
+# =============================================================================
+
+# =============================================================================
+class PassengerScheduleInfo(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        lbl = QLabel(
+            "To add a weekly schedule, enable Driver Mode in your profile.\n\n"
+            "This helps passengers find you when your route matches their request."
+        )
+        lbl.setWordWrap(True)
+        v.addStretch(1)
+        v.addWidget(lbl, 0, Qt.AlignHCenter)
+        v.addStretch(1)
 # =============================================================================
 
 
@@ -1641,27 +1823,16 @@ class CurrentRidePage(QWidget):
 
         self.chat_box = QTextEdit()
         self.chat_box.setReadOnly(True)
-        self.chat_box.setStyleSheet("""
-            QTextEdit {
-                background-color: #020617;
-                border-radius: 18px;
-                border: 1px solid rgba(148,163,184,0.35);
-                padding: 10px;
-            }
-        """)
+
+        # Strip inherited QSS so our HTML bubbles control the look fully
+        self.chat_box.setStyleSheet(
+            "QTextEdit, QTextEdit * { all: unset; background: transparent; }"
+        )
 
         v.addWidget(self.chat_box, 1)
 
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Type a message...")
-        self.chat_input.setStyleSheet("""
-            QLineEdit {
-                background-color: rgba(15,23,42,0.9);
-                border-radius: 999px;
-                padding: 8px 12px;
-                border: 1px solid rgba(148,163,184,0.35);
-            }
-        """)
         v.addWidget(self.chat_input)
 
         h = QHBoxLayout()
@@ -1671,59 +1842,54 @@ class CurrentRidePage(QWidget):
         h.addWidget(self.complete_btn)
         v.addLayout(h)
 
-        # hide complete button by default (passenger)
-        self.complete_btn.hide()
-
-        
+        self.complete_btn.hide()  # passenger by default
         self.send_btn.clicked.connect(self.on_send_clicked)
-    
+
     def append_bubble(self, text: str, outgoing: bool, timestamp=None):
-        """
-        Render a single message as a left/right chat bubble
-        with rounded corners and a small timestamp.
-        """
         if not text:
             return
 
         safe = html.escape(text).replace("\n", "<br/>")
 
-        if outgoing:
-            align = "right"
-            bg = "#4f46e5"   # indigo
-            fg = "#f9fafb"
-            label = "You"
-        else:
-            align = "left"
-            bg = "#111827"   # dark gray
-            fg = "#e5e7eb"
-            label = "Them"
-
         if timestamp is None:
             timestamp = QDateTime.currentDateTime()
         ts_str = timestamp.toString("HH:mm")
 
-        # table trick so Qt actually honors left/right alignment
+        mw = self.window()
+        other_name = None
+        if mw is not None:
+            other_name = getattr(mw, "other_party_name", None)
+
+        if outgoing:
+            align = "right"
+            bg = "#4f46e5"
+            fg = "#f9fafb"
+            name = "You"
+        else:
+            align = "left"
+            bg = "#e5e7eb"
+            fg = "#111827"
+            name = other_name or "Them"
+
         bubble_html = f"""
-        <table width="100%" cellspacing="0" cellpadding="0">
-          <tr>
-            <td align="{align}">
-              <span style="
-                  background-color:{bg};
-                  color:{fg};
-                  padding:8px 12px;
-                  border-radius:18px;
-                  font-size:10pt;
-                  display:inline-block;
-              ">
-                <span style="font-size:8pt; opacity:0.7;">{label}:</span>
-                {safe}
-                <span style="font-size:8pt; opacity:0.6; margin-left:8px;">
-                  {ts_str}
-                </span>
-              </span>
-            </td>
-          </tr>
-        </table>
+        <div style="padding:4px 0; text-align:{align};">
+          <div style="
+              display:inline-block;
+              max-width:60%;
+              background:{bg};
+              color:{fg};
+              padding:8px 12px;
+              border-radius:18px;
+              font-size:10pt;
+              line-height:1.4;
+          ">
+            <div style="font-size:8pt; opacity:0.7; margin-bottom:2px;">{name}</div>
+            <div>{safe}</div>
+            <div style="font-size:8pt; opacity:0.6; margin-top:4px; text-align:right;">
+              {ts_str}
+            </div>
+          </div>
+        </div>
         """
 
         cursor = self.chat_box.textCursor()
@@ -1733,8 +1899,6 @@ class CurrentRidePage(QWidget):
         self.chat_box.moveCursor(QTextCursor.End)
         self.chat_box.ensureCursorVisible()
 
-
-
     def on_send_clicked(self):
         msg = self.chat_input.text().strip()
         if not msg:
@@ -1743,35 +1907,31 @@ class CurrentRidePage(QWidget):
         ok = False
         if hasattr(mw, "send_chat_message"):
             ok = mw.send_chat_message(msg)
-        
-            if ok:
-                self.append_bubble(msg, outgoing=True)
-                self.chat_input.clear()
-            else:
-                QMessageBox.warning(self, "Send Failed", "Failed to send message.")
+        if ok:
+            self.append_bubble(msg, outgoing=True)
+            self.chat_input.clear()
+        else:
+            QMessageBox.warning(self, "Send Failed", "Failed to send message.")
 
     def load_for_driver(self, match_payload):
-        """
-        Called when driver receives a MATCH notification
-        """
-        p = match_payload.get("passenger_info", {})
+        p = match_payload.get("passenger_info", {}) or {}
         passenger_name = p.get("name", "Passenger")
-        driver_name = match_payload.get("driver_info", {}).get("name", "Driver")
-        self.info_label.setText(f"Passenger matched! Ride with passenger: {passenger_name}")
+        self.info_label.setText(f"Passenger matched!\nRiding with: {passenger_name}")
         self.complete_btn.show()
 
     def load_for_passenger(self, payload):
-        """
-        Called when passenger receives MATCH notification
-        """
-        d = payload.get("driver_info", {})
-        name = d.get("name", "Driver")
-        model = d.get("vehicle_model", "Unknown")
-        color = d.get("vehicle_color", "Unknown")
-        plate = d.get("vehicle_plate", "Unknown")
+        d = payload.get("driver_info", {}) or {}
+        name = d.get("name") or "Driver"
+        vehicle = d.get("vehicle") or {}
+        model = vehicle.get("model") or "Unknown"
+        color = vehicle.get("color") or "Unknown"
+        plate = vehicle.get("plate") or "Unknown"
 
         self.info_label.setText(
-            f"Driver matched!\nName: {name}\nCar: {model} ({color})\nPlate: {plate}"
+            f"Driver matched!\n"
+            f"Name: {name}\n"
+            f"Car: {model} ({color})\n"
+            f"Plate: {plate}"
         )
         self.complete_btn.hide()
 # =============================================================================
@@ -1940,11 +2100,17 @@ class RatingDialog(QDialog):
 
 class MainWindow(QMainWindow):
     incoming_p2p_connection = pyqtSignal(object, tuple)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AUBus")
         self.setObjectName("MainWindow")
         self.resize(1000, 650)
+
+        # --- theme state ---
+        self.current_theme = "dark"
+        self.theme_toggle_btn_app = None      # sidebar button
+        self.theme_toggle_btn_auth = None     # login/register button
 
         # Persistent session (used by login + profile + schedule + ride)
         self.session = JsonlSession(HOST, PORT, SOCKET_TIMEOUT)
@@ -1954,59 +2120,89 @@ class MainWindow(QMainWindow):
         self.p2p_thread = None
         self.chat_endpoint = None
         self.incoming_p2p_connection.connect(self._on_incoming_p2p_connection)
-        
 
         self.active_request_id = None
 
         self.root = QStackedWidget()
         self.setCentralWidget(self.root)
 
-        # ---- Auth Page ----
+        # ------------------------------------------------------------------
+        # AUTH PAGE (Login / Register)  + theme toggle
+        # ------------------------------------------------------------------
         self.auth_page = QWidget()
         v_auth = QVBoxLayout(self.auth_page)
+        v_auth.setContentsMargins(32, 32, 32, 32)
+
         tabs = QTabWidget()
         self.login_tab = LoginForm(self.session)
         self.register_tab = RegisterForm(self.session)
         tabs.addTab(self.login_tab, "Login")
         tabs.addTab(self.register_tab, "Register")
-        v_auth.addWidget(tabs, 1)
+
+        v_auth.addStretch(1)
+        v_auth.addWidget(tabs, 0, Qt.AlignHCenter)
+        v_auth.addStretch(1)
+
+        # bottom row: theme toggle + spacer
+        auth_bottom = QHBoxLayout()
+        self.theme_toggle_btn_auth = QPushButton("Light mode")
+        self.theme_toggle_btn_auth.setObjectName("ThemeToggleAuth")
+        self.theme_toggle_btn_auth.setCheckable(True)
+        self.theme_toggle_btn_auth.clicked.connect(self.toggle_theme)
+        auth_bottom.addWidget(self.theme_toggle_btn_auth)
+        auth_bottom.addStretch(1)
+        v_auth.addLayout(auth_bottom)
+
         self.root.addWidget(self.auth_page)
 
-        # ---- App Page ----
+        # ------------------------------------------------------------------
+        # APP PAGE (Sidebar + main stack)  + theme toggle
+        # ------------------------------------------------------------------
         self.app_page = QWidget()
         self.root.addWidget(self.app_page)
         h = QHBoxLayout(self.app_page)
+        h.setContentsMargins(0, 0, 0, 0)
 
         left = QWidget()
         left.setObjectName("SideBar")
         left_l = QVBoxLayout(left)
+        left_l.setContentsMargins(12, 16, 12, 16)
+
         self.btn_profile = QPushButton("Profile")
         self.btn_sched   = QPushButton("Schedule")
         self.btn_ride    = QPushButton("Ride")
         self.btn_current = QPushButton("Current Ride")
-        self.btn_logout = QPushButton("Logout")
-        
+
         for b in (self.btn_profile, self.btn_sched, self.btn_ride, self.btn_current):
             b.setCheckable(True)
             b.setAutoExclusive(True)
             left_l.addWidget(b)
+
         left_l.addStretch(1)
 
-        
+        # sidebar theme toggle
+        self.theme_toggle_btn_app = QPushButton("Light mode")
+        self.theme_toggle_btn_app.setObjectName("ThemeToggleApp")
+        self.theme_toggle_btn_app.setCheckable(True)
+        self.theme_toggle_btn_app.clicked.connect(self.toggle_theme)
+        left_l.addWidget(self.theme_toggle_btn_app)
 
+        self.btn_logout = QPushButton("Logout")
         left_l.addWidget(self.btn_logout)
-        self.btn_logout.clicked.connect(self.on_logout)
 
-        
+        self.btn_logout.clicked.connect(self.on_logout)
 
         self.stack = QStackedWidget()
 
-        
+        # dummy profile until login
         self.profile_page = title_page("Profile (login required)")
         self.stack.addWidget(self.profile_page)
 
-        self.schedule_page = title_page("Your Schedule")
-        self.stack.addWidget(self.schedule_page)
+        # schedule (driver / passenger variants)
+        self.schedule_page_driver = ScheduleScreen(self.session)
+        self.schedule_page_passenger = PassengerScheduleInfo()
+        self.stack.addWidget(self.schedule_page_driver)
+        self.stack.addWidget(self.schedule_page_passenger)
 
         self.ride_page = RideRequestPage(self.session)
         self.stack.addWidget(self.ride_page)
@@ -2016,18 +2212,19 @@ class MainWindow(QMainWindow):
         self.current_ride_page.complete_btn.clicked.connect(self.complete_ride)
 
         self.btn_profile.clicked.connect(lambda: self.stack.setCurrentWidget(self.profile_page))
-        self.btn_sched.clicked.connect(lambda: self.stack.setCurrentWidget(self.schedule_page))
+        # schedule button wiring is handled in on_driver_mode_changed
         self.btn_ride.clicked.connect(lambda: self.stack.setCurrentWidget(self.ride_page))
         self.btn_current.clicked.connect(lambda: self.stack.setCurrentWidget(self.current_ride_page))
 
         self.btn_current.setEnabled(False)
         self.btn_profile.setChecked(True)
         self.stack.setCurrentWidget(self.profile_page)
-        
+
         center = QWidget()
         center_layout = QVBoxLayout(center)
-        center_layout.setContentsMargins(16,16,16,16)
+        center_layout.setContentsMargins(16, 16, 16, 16)
         center_layout.addWidget(self.stack, 1)
+
         h.addWidget(left)
         h.addWidget(center, 1)
 
@@ -2037,51 +2234,65 @@ class MainWindow(QMainWindow):
         # Schedule initially disabled until we know driver mode
         self.set_schedule_enabled(False)
 
-    def set_schedule_enabled(self, on: bool):
-        self.btn_sched.setEnabled(bool(on))
-        if hasattr(self, "schedule_page"):
-            self.schedule_page.setEnabled(bool(on))
+        # finally apply initial theme
+        self.set_theme("dark")
 
+    # ------------------------------------------------------------------ helpers
+    def set_schedule_enabled(self, on: bool):
+        """Enable/disable the Schedule button (used pre/post login)."""
+        self.btn_sched.setEnabled(bool(on))
+
+    # ------------------------------------------------------------------ auth / profile / driver mode
     def after_login(self, user_preview: dict):
         self.user_preview = user_preview
+
         # Profile screen
         profile = ProfileScreen(self.session, user_preview)
         profile.driverModeChanged.connect(self.on_driver_mode_changed)
 
-        
         self.stack.removeWidget(self.profile_page)
         self.profile_page.deleteLater()
         self.profile_page = profile
         self.stack.insertWidget(0, self.profile_page)
 
-        
-        self.stack.removeWidget(self.schedule_page)
-        self.schedule_page.deleteLater()
-        self.schedule_page = ScheduleScreen(self.session)
-        self.stack.insertWidget(1, self.schedule_page)
+        # we now know user role, so enable Schedule
+        self.set_schedule_enabled(True)
 
-        
         is_driver = bool(user_preview.get("is_driver", False))
         self.on_driver_mode_changed(is_driver)
 
         self.root.setCurrentWidget(self.app_page)
         self.stack.setCurrentWidget(self.profile_page)
         self.btn_profile.setChecked(True)
-        
-
 
     def on_driver_mode_changed(self, is_driver: bool):
-        # enable/disable Schedule tab
-        self.set_schedule_enabled(is_driver)
-
         # P2P listener follows driver mode
         if is_driver:
             self.start_p2p_listener()
         else:
             self.stop_p2p_listener()
 
-        # swap ride page (index 2) between driver/passenger views
-        if hasattr(self, "ride_page"):
+        # ---- wire Schedule button target ----
+        try:
+            self.btn_sched.clicked.disconnect()
+        except TypeError:
+            # no previous connection, ignore
+            pass
+
+        if is_driver:
+            # driver sees real schedule editor
+            self.btn_sched.clicked.connect(
+                lambda: self.stack.setCurrentWidget(self.schedule_page_driver)
+            )
+        else:
+            # passenger sees info: "you must be a driver to add a schedule"
+            self.btn_sched.clicked.connect(
+                lambda: self.stack.setCurrentWidget(self.schedule_page_passenger)
+            )
+
+        # ---- swap ride page between passenger/driver views ----
+        # remove old ride_page from stack
+        if hasattr(self, "ride_page") and self.ride_page is not None:
             self.stack.removeWidget(self.ride_page)
             self.ride_page.deleteLater()
 
@@ -2091,11 +2302,13 @@ class MainWindow(QMainWindow):
         else:
             self.ride_page = RideRequestPage(self.session)
 
+        # add new ride_page and keep Ride button pointing to it
         self.stack.addWidget(self.ride_page)
-        
+        # existing lambda uses self.ride_page, so no need to reconnect btn_ride
 
+    # ------------------------------------------------------------------ window close / logout
     def closeEvent(self, event):
-        """on window close, logout cleanly and close the session"""
+        """On window close, logout cleanly and close the session."""
         try:
             if self.session is not None:
                 req = {
@@ -2104,33 +2317,33 @@ class MainWindow(QMainWindow):
                     "payload": {}
                 }
                 try:
-                    # best-effort logout; ignore errors
                     self.session.request(req)
                 except Exception:
                     pass
 
                 try:
-                    self.stop_p2p_listener() 
+                    self.stop_p2p_listener()
                     self.session.close()
                 except Exception:
                     pass
         finally:
             super().closeEvent(event)
-            
+
     def on_logout(self):
         try:
-            req = {"type": "AUTH.LOGOUT_REQ",
-               "id": str(uuid.uuid4()),
-               "payload": {}}
+            req = {
+                "type": "AUTH.LOGOUT_REQ",
+                "id": str(uuid.uuid4()),
+                "payload": {}
+            }
             self.session.request(req)
         except Exception:
-            # If network fails, still locally reset
             pass
 
-        self.stop_p2p_listener() #stop p2p
+        self.stop_p2p_listener()
 
         if isinstance(self.ride_page, DriverRidePage):
-            self.ride_page.timer.stop()  # stop auto-refresh timer
+            self.ride_page.timer.stop()
 
         self.set_schedule_enabled(False)
         self.root.setCurrentWidget(self.auth_page)
@@ -2140,82 +2353,59 @@ class MainWindow(QMainWindow):
         self.btn_current.setEnabled(False)
         self.stack.setCurrentWidget(self.profile_page)
 
+    # ------------------------------------------------------------------ P2P listener / chat
     def _on_incoming_p2p_connection(self, conn, addr):
         """Attach an incoming passenger P2P socket on the GUI thread."""
-        # close old chat endpoint if any
         if getattr(self, "chat_endpoint", None) is not None:
             try:
                 self.chat_endpoint.close()
             except Exception:
                 pass
 
-        # wrap the accepted socket
         self.chat_endpoint = P2PChatEndpoint(conn, self)
         self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
         self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
 
-        # let the driver see that the passenger connected
-        # if hasattr(self, "current_ride_page") and self.current_ride_page:
-        #     self.current_ride_page.chat_box.append(
-        #         f"<i>Passenger connected from {addr[0]}:{addr[1]}</i>"
-        #     )
-
     def start_p2p_listener(self):
-        """Start a simple TCP listener for driver P2P and announce it via PEER.OPEN_REQ."""
-        # If already running, do nothing
+        """Start TCP listener for driver P2P and announce via PEER.OPEN_REQ."""
         if self.p2p_sock is not None:
             return
 
         try:
-            # 1) create listening socket on an ephemeral port
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("0.0.0.0", 0))   # OS chooses port
+            s.bind(("0.0.0.0", 0))
             s.listen(1)
             port = s.getsockname()[1]
             self.p2p_sock = s
 
-            # 2) tell server where we are listening
             req = {
                 "type": "PEER.OPEN_REQ",
                 "id": str(uuid.uuid4()),
-                "payload": {
-                    "p2p_port": port
-                    # we could also send external_ip/external_port if we knew them
-                }
+                "payload": {"p2p_port": port}
             }
             try:
                 resp = self.session.request(req)
             except Exception as e:
-                # if this fails, just log and shut listener down
                 print(f"PEER.OPEN_REQ failed: {e}")
                 s.close()
                 self.p2p_sock = None
                 return
 
             if resp.get("type") != "PEER.OPEN_RES":
-                # server rejected; clean up
                 print(f"PEER.OPEN_RES error: {resp}")
                 s.close()
                 self.p2p_sock = None
                 return
 
-            # 3) spin a background thread just to accept connections
             def _p2p_loop(listener: socket.socket):
                 try:
                     while True:
                         conn, addr = listener.accept()
                         print(f"P2P connection from {addr}")
-                        # hand off to GUI thread via signal
                         self.incoming_p2p_connection.emit(conn, addr)
-                        # DO NOT close conn here – P2PChatEndpoint owns it now
                 except Exception as e:
                     print("p2p_loop error:", e)
-                    # any error → exit thread
-                    pass
-
-
-
 
             t = threading.Thread(target=_p2p_loop, args=(s,), daemon=True)
             t.start()
@@ -2241,34 +2431,31 @@ class MainWindow(QMainWindow):
         self.p2p_thread = None
 
         ep = getattr(self, "chat_endpoint", None)
-        self.chat_endpoint = None  # remove reference first
+        self.chat_endpoint = None
         if ep:
             try:
                 ep.close()
-            except:
+            except Exception:
                 pass
-
 
     def on_p2p_message(self, text: str):
         page = getattr(self, "current_ride_page", None)
         if page is not None:
-            page.append_bubble(text, outgoing = False)
-        
+            page.append_bubble(text, outgoing=False)
 
     def on_p2p_disconnected(self):
         """Handle P2P disconnect."""
         if hasattr(self, "current_ride_page") and self.current_ride_page is not None:
-            self.current_ride_page.append_bubble("<i>Chat disconnected.</i>", outgoing = False)
+            self.current_ride_page.append_bubble("<i>Chat disconnected.</i>", outgoing=False)
         if getattr(self, "chat_endpoint", None) is not None:
             self.chat_endpoint = None
 
-    
+    # ------------------------------------------------------------------ PUSH events
     def on_push_received(self, msg: dict):
         t = msg.get("type")
         payload = msg.get("payload", {})
 
         if t == "RIDE.MATCHED":
-            #debug message
             print("MainWindow: RIDE.MATCHED received, payload =", payload)
             self.btn_ride.setEnabled(False)
             self.btn_current.setEnabled(True)
@@ -2279,34 +2466,41 @@ class MainWindow(QMainWindow):
             req_id = payload.get("request_id")
             if req_id is None and isinstance(self.ride_page, RideRequestPage):
                 req_id = self.ride_page.current_request_id
-            
+
             self.active_request_id = req_id
+
             if self.user_preview.get("is_driver"):
+                # driver sees passenger name in chat
+                passenger_info = payload.get("passenger_info", {}) or {}
+                self.other_party_name = passenger_info.get("name", "Passenger")
                 self.current_ride_page.load_for_driver(payload)
             else:
+                # passenger sees driver name in chat
+                driver_info = payload.get("driver_info", {}) or {}
+                self.other_party_name = driver_info.get("name", "Driver")
                 self.current_ride_page.load_for_passenger(payload)
                 self.on_ride_matched(msg)
+
                 driver_ip = payload.get("driver_ip")
                 driver_port = payload.get("driver_port")
 
                 if driver_ip and driver_port:
                     try:
-                        sock  = socket.create_connection((driver_ip, int(driver_port)), timeout = 5.0)
+                        sock = socket.create_connection((driver_ip, int(driver_port)), timeout=5.0)
                         sock.settimeout(None)
                     except Exception as e:
                         QMessageBox.warning(self, "Chat", f"Could not connect to driver: {e}")
                     else:
                         if getattr(self, "chat_endpoint", None) is not None:
                             self.chat_endpoint.close()
-                        
+
                         self.chat_endpoint = P2PChatEndpoint(sock, self)
                         self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
                         self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
-
                 else:
                     if self.current_ride_page is not None:
                         self.current_ride_page.append_bubble(
-                            f"<i>Driver did not provide chat info</i>", outgoing=False
+                            "<i>Driver did not provide chat info</i>", outgoing=False
                         )
 
         elif t == "REQUEST.CLOSED":
@@ -2316,32 +2510,24 @@ class MainWindow(QMainWindow):
             self.on_driver_broadcast(msg)
 
         elif t == "PROFILE.UPDATED":
-            # DEBUG: see the push on BOTH sides
             print("PROFILE.UPDATED push:", payload)
 
-            # 1) Update the cached preview of the *logged in user*
             if payload:
                 self.user_preview["rating_avg"] = payload.get(
-                    "rating_avg",
-                    self.user_preview.get("rating_avg"),
+                    "rating_avg", self.user_preview.get("rating_avg"),
                 )
                 self.user_preview["rating_count"] = payload.get(
-                    "rating_count",
-                    self.user_preview.get("rating_count"),
+                    "rating_count", self.user_preview.get("rating_count"),
                 )
 
-            # 2) Refresh profile screen if it has been constructed
             if isinstance(self.profile_page, ProfileScreen):
                 self.profile_page.update_from_user_preview(self.user_preview)
 
-    
-    
-        
     def on_ride_matched(self, msg: dict):
         payload = msg.get("payload", {})
         if isinstance(self.ride_page, RideRequestPage):
             self.ride_page.handle_matched(payload)
-    
+
     def on_request_closed(self, msg: dict):
         """Called when server notifies that a ride was closed"""
         payload = msg.get("payload", {})
@@ -2351,9 +2537,8 @@ class MainWindow(QMainWindow):
             self.ride_page.handle_request_closed(payload)
 
         if isinstance(self.ride_page, RideRequestPage):
-        # reset the passenger's request form state
             self.ride_page.set_idle_state()
-        
+
         if reason == "completed":
             self.show_rating_dialog()
 
@@ -2368,16 +2553,13 @@ class MainWindow(QMainWindow):
                 self.current_ride_page.info_label.setText("No active ride")
         except AttributeError:
             pass
-    
+
     def on_driver_broadcast(self, msg: dict):
         if isinstance(self.ride_page, DriverRidePage):
             self.ride_page.add_broadcast(msg.get("payload", {}))
-    
+
+    # ------------------------------------------------------------------ rating flow
     def show_rating_dialog(self):
-        """
-        Show star rating dialog for the current ride (if any)
-        and send RIDE.RATE_REQ to the server.
-        """
         req_id = self.active_request_id
         if not req_id:
             return
@@ -2393,7 +2575,6 @@ class MainWindow(QMainWindow):
         dlg = RatingDialog(self, title=title, subtitle=subtitle)
         rating = dlg.get_rating()
         if rating is None:
-            # user skipped
             return
 
         try:
@@ -2418,88 +2599,70 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Rating failed", f"Server error: {msg}")
         else:
             QMessageBox.warning(self, "Rating failed", f"Unexpected response: {rtype}")
- 
 
     def complete_ride(self):
         # DRIVER ONLY
         if not self.active_request_id:
             QMessageBox.warning(self, "No active ride", "No active ride to rate")
             return
-        
-        payload = {"request_id": self.active_request_id}   # store this on match
+
+        payload = {"request_id": self.active_request_id}
         try:
             res = self.session.request({"type": "RIDE.COMPLETE_REQ", "payload": payload})
         except Exception as e:
             QMessageBox.warning(self, "Ride Completed", f"Network: {e}")
             return
-        
+
         if res["type"] == "RIDE.COMPLETE_RES":
             self.show_rating_dialog()
             self.return_to_idle_state()
-        
+
         elif res["type"] == "ERROR":
             p = res.get("payload", {})
             QMessageBox.warning(self, "Ride Completed", p.get("message", "Failed to complete ride."))
         else:
             QMessageBox.warning(self, "Ride Completed", f"Unexpected response: {res.get('type')}")
-            
-    
+
     def return_to_idle_state(self):
         # driver or passenger
-
-        # Disable current ride
         self.btn_current.setEnabled(False)
-
-        # Enable ride
         self.btn_ride.setEnabled(True)
         self.btn_ride.setChecked(True)
 
-
-        # Switch back to ride page
         self.stack.setCurrentWidget(self.ride_page)
         self.active_request_id = None
 
-        # clear chat/info
         self.current_ride_page.chat_box.clear()
         self.current_ride_page.info_label.setText("No active ride")
 
         ep = getattr(self, "chat_endpoint", None)
-        self.chat_endpoint = None  # remove reference first
+        self.chat_endpoint = None
         if ep:
             try:
                 ep.close()
-            except:
+            except Exception:
                 pass
 
-
     def on_driver_ride_accepted(self, request_id: str, payload: dict):
-        """
-        Called when THIS driver accepts a ride successfully.
-        We immediately go into 'current ride' state for the driver.
-        """
-        # Disable ride tab, enable Current Ride tab
+        """Called when THIS driver accepts a ride successfully."""
         self.btn_ride.setEnabled(False)
         self.btn_current.setEnabled(True)
 
-        # Switch UI to Current Ride
         self.btn_current.setChecked(True)
         self.stack.setCurrentWidget(self.current_ride_page)
 
-        # Remember which request this ride is for (used by complete_ride)
         self.active_request_id = request_id
 
-        # Build a payload compatible with load_for_driver
         match_payload = dict(payload)
         match_payload.setdefault("request_id", request_id)
 
+        passenger_info = payload.get("passenger_info", {})
+        self.other_party_name = passenger_info.get("name", "Passenger")
+
         self.current_ride_page.load_for_driver(match_payload)
 
+    # ------------------------------------------------------------------ chat send + theme
     def send_chat_message(self, text: str) -> bool:
-        """Send a chat message over the active P2P endpoint.
-
-        Returns True on success, False on failure.
-        Also prints the exception so we know what went wrong.
-        """
         ep = getattr(self, "chat_endpoint", None)
         if ep is None:
             print("send_chat_message: no chat_endpoint")
@@ -2515,12 +2678,49 @@ class MainWindow(QMainWindow):
             print("send_chat_message: ERROR while sending:", e)
             traceback.print_exc()
             return False
+
+
+
+    def set_theme(self, mode: str):
+        """mode: 'dark' or 'light'"""
+        self.current_theme = "light" if mode == "light" else "dark"
+
+        if self.current_theme == "light":
+            QApplication.instance().setStyleSheet(LIGHT_STYLESHEET)
+            text = "Dark mode"
+            checked = True
+        else:
+            QApplication.instance().setStyleSheet(DARK_STYLESHEET)
+            text = "Light mode"
+            checked = False
+
+        # keep both buttons in sync
+        if self.theme_toggle_btn_app is not None:
+            self.theme_toggle_btn_app.blockSignals(True)
+            self.theme_toggle_btn_app.setText(text)
+            self.theme_toggle_btn_app.setChecked(checked)
+            self.theme_toggle_btn_app.blockSignals(False)
+
+        if self.theme_toggle_btn_auth is not None:
+            self.theme_toggle_btn_auth.blockSignals(True)
+            self.theme_toggle_btn_auth.setText(text)
+            self.theme_toggle_btn_auth.setChecked(checked)
+            self.theme_toggle_btn_auth.blockSignals(False)
+
+
+    def toggle_theme(self):
+        if self.current_theme == "dark":
+            self.set_theme("light")
+        else:
+            self.set_theme("dark")
+
+
 def main():
     app = QApplication(sys.argv)
-    apply_bento_theme(app)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     main()
