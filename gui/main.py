@@ -1156,34 +1156,6 @@ class TrueFalseQuizWidget(QWidget):
         card = QFrame(self)
         card.setFrameShape(QFrame.StyledPanel)
         card.setObjectName("quizCard")
-        card.setStyleSheet("""
-            QFrame#quizCard {
-                border: 1px solid #cccccc;
-                border-radius: 10px;
-                background-color: #f7f7f7;
-            }
-            QLabel#quizTitle {
-                font-size: 11pt;
-                font-weight: 600;
-                color: #333333;
-            }
-            QLabel#quizQuestion {
-                font-size: 10pt;
-                color: #222222;
-            }
-            QLabel#quizFeedback {
-                font-size: 9pt;
-            }
-            QPushButton {
-                padding: 6px 14px;
-                border-radius: 8px;
-                border: 1px solid #bbbbbb;
-                background-color: #ffffff;
-            }
-            QPushButton:hover {
-                background-color: #eeeeee;
-            }
-        """)
 
         outer = QVBoxLayout(self)
         outer.addWidget(card)
@@ -1192,7 +1164,7 @@ class TrueFalseQuizWidget(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
-        self.title = QLabel("💡 Networking: True or False?")
+        self.title = QLabel("A Networking Game: True or False?")
         self.title.setObjectName("quizTitle")
         self.title.setAlignment(Qt.AlignCenter)
 
@@ -1293,6 +1265,8 @@ class TrueFalseQuizWidget(QWidget):
         self.btn_true.clicked.connect(lambda: self.check_answer(True))
         self.btn_false.clicked.connect(lambda: self.check_answer(False))
 
+        self.next_question()
+
 
     def next_question(self):
         if not self.questions:
@@ -1311,7 +1285,7 @@ class TrueFalseQuizWidget(QWidget):
         self._last_index = idx
         self._current_question = self.questions[idx]
         self.question_label.setText(self._current_question["text"])
-        self.feedback.setText("Play a Small True or False while you wait ✨")
+        self.feedback.setText("Are you right?")
 
     def check_answer(self, user_answer: bool):
         if not self._current_question:
