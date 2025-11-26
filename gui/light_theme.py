@@ -53,6 +53,31 @@ QWidget#SideBar QPushButton:checked {
     color: #FFF9F0;
 }
 
+/* ===== Star rating ===== */
+QPushButton#StarButton {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+    max-width: 28px;
+    min-height: 0;
+    max-height: 28px;
+    text-align: center;
+    font-size: 20px;
+    color: #9ca3af;             /* neutral grey on light */
+}
+
+
+QPushButton#StarButton[hover="true"] {
+    color: #eab308;             /* hover yellow */
+}
+
+QPushButton#StarButton[active="true"] {
+    color: #f59e0b;             /* selected yellow */
+}
+
+
 /* ===== Auth / cards ===== */
 QWidget#login_card,
 QWidget#register_card {

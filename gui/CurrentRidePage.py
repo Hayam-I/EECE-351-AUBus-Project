@@ -34,7 +34,7 @@ class CurrentRidePage(QWidget):
         # Chat area
         self.chat_box = QTextEdit()
         self.chat_box.setReadOnly(True)
-        self.chat_box.setStyleSheet("QTextEdit, QTextEdit * { all: unset; background: transparent; }")
+        self.chat_box.setStyleSheet("QTextEdit, QTextEdit * { background: transparent; }")
 
         v.addWidget(self.chat_box, 1)
 
