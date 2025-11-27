@@ -1,27 +1,34 @@
 import sys
 import traceback
+import json
+import re
 import socket
 import uuid
 import threading
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QStackedWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTabWidget, QMessageBox)
-from PyQt5.QtCore import pyqtSignal
-
-
-#page imports
-from gui.dark_theme import DARK_STYLESHEET
-from gui.light_theme import LIGHT_STYLESHEET
-from gui.title_page import title_page
-from gui.session import JsonlSession
-from gui.RegisterForm import RegisterForm
-from gui.LoginForm import LoginForm
-from gui.ProfileScreen import ProfileScreen
-from gui.ScheduleInfoScreen import ScheduleInfoScreen
-from gui.ScheduleScreen import ScheduleScreen
+import logging
+import html
+from client.map_selector import MapSelector
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QStackedWidget,
+    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
+    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
+    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QFrame
+)
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject, QPointF
+from PyQt5.QtGui import QTextCursor, QPixmap, QIcon, QPolygonF, QColor, QPainter
 from gui.p2p_chat_endpoint import P2PChatEndpoint
-from gui.RideRequestPage import RideRequestPage
-from gui.DriverRidePage import DriverRidePage
-from gui.CurrentRidePage import CurrentRidePage
-from gui.RideDialog import RateRideDialog
+
+import requests
+import random
+
+
+
+# ===== error popup for uncaught exceptions =====
+def excepthook(exc_type, exc, tb):
+    traceback.print_exception(exc_type, exc, tb)
+    QMessageBox.critical(None, "Unhandled Error", f"{exc_type.__name__}: {exc}")
+sys.excepthook = excepthook
+
 
 
 # ===== transport config =====
@@ -30,23 +37,1913 @@ PORT = 6000
 SOCKET_TIMEOUT = 4.0
 ENCODING = "utf-8"
 
-def apply_theme(mode: str = "dark"):
-    app = QApplication.instance()
-    if app is None:
+
+
+#==== weather api constants ======
+WEATHER_API_URL = "http://api.weatherapi.com/v1/current.json"
+WEATHER_API_KEY = "77ba44421ca942b892a154619252311"
+
+
+
+# ===== client helpers from client/net.py =====
+from client.net import send_json, recv_json
+def title_page(text):
+    w = QWidget()
+    v = QVBoxLayout(w)
+    lbl = QLabel(text)
+    lbl.setAlignment(Qt.AlignCenter)
+    lbl.setObjectName("page_title")
+    v.addStretch(1)
+    v.addWidget(lbl)
+    v.addStretch(1)
+    return w
+
+
+
+# =============================================================================
+# design
+def apply_bento_theme(app: QApplication):
+    app.setStyle("Fusion")  # more modern base style
+
+    app.setStyleSheet("""
+    /* ====== Global background ====== */
+    QMainWindow#MainWindow, QWidget {
+        background-color: #020617; /* very dark navy */
+        color: #e5e7eb;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        font-size: 10pt;
+    }
+
+    /* ====== Sidebar ====== */
+    QWidget#SideBar {
+        background-color: #020617;
+        border-right: 1px solid #1f2937;
+    }
+
+    QWidget#SideBar QPushButton {
+        background-color: transparent;
+        border: none;
+        color: #9ca3af;
+        padding: 8px 14px;
+        text-align: left;
+        border-radius: 10px;
+    }
+
+    QWidget#SideBar QPushButton:hover {
+        background-color: rgba(99,102,241,0.18); /* soft indigo */
+        color: #e5e7eb;
+    }
+
+    QWidget#SideBar QPushButton:checked {
+        background-color: #4f46e5; /* primary indigo */
+        color: #f9fafb;
+    }
+
+    /* ====== Cards / panels ====== */
+    QStackedWidget, QWidget#login_card, QWidget#register_card {
+        background-color: #020617;
+        border-radius: 18px;
+    }
+
+    QWidget#login_card, QWidget#register_card {
+        border: 1px solid rgba(148,163,184,0.35);
+        background-color: qlineargradient(
+            x1:0, y1:0, x2:1, y2:1,
+            stop:0 #020617,
+            stop:1 #020617
+        );
+    }
+    
+    QLabel {
+        color: #e5e7eb;
+        background-color: transparent;   /* <<< this removes the black box */
+        border: none;
+    }
+
+    QLabel#page_title {
+        font-size: 18pt;
+        font-weight: 600;
+        color: #e5e7eb;
+    }
+
+    /* ====== Inputs ====== */
+    QLineEdit, QTimeEdit, QDateTimeEdit, QComboBox {
+        background-color: rgba(255,255,255,0.04);
+        border: 1px solid rgba(148,163,184,0.25); 
+        border-radius: 8px;
+        padding: 6px 10px;
+        color: #e5e7eb;
+        selection-background-color: #4f46e5;
+        selection-color: #f9fafb;
+    }
+                      
+
+    QLineEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {
+        border: 1px solid #6366f1;
+        background-color: rgba(255,255,255,0.07);
+    }
+
+    QComboBox QAbstractItemView {
+        background-color: #020617;
+        border: 1px solid #1f2937;
+        selection-background-color: #4f46e5;
+        selection-color: #f9fafb;
+    }
+
+    /* ====== Primary / secondary buttons ====== */
+    QPushButton {
+        background-color: #111827;
+        color: #e5e7eb;
+        border-radius: 10px;
+        padding: 6px 14px;
+        border: 1px solid #1f2937;
+    }
+
+    QPushButton:hover {
+        background-color: #1f2937;
+        border-color: #4b5563;
+    }
+
+    QPushButton:pressed {
+        background-color: #4f46e5;
+        border-color: #4f46e5;
+        color: #f9fafb;
+    }
+
+    QPushButton:disabled {
+        background-color: #020617;
+        color: #4b5563;
+        border-color: #111827;
+    }
+
+    /* ====== Tables ====== */
+    QTableWidget {
+        background-color: #020617;
+        alternate-background-color: #020617;
+        border: 1px solid #111827;
+        border-radius: 14px;
+        gridline-color: #111827;
+        selection-background-color: rgba(129,140,248,0.25);
+        selection-color: #f9fafb;
+    }
+
+    QHeaderView::section {
+        background-color: #020617;
+        color: #9ca3af;
+        padding: 6px 8px;
+        border: none;
+        border-bottom: 1px solid #111827;
+    }
+
+    QTableCornerButton::section {
+        background-color: #020617;
+        border: none;
+    }
+
+    /* Scrollbars (subtle) */
+    QScrollBar:vertical, QScrollBar:horizontal {
+        background: #020617;
+        border-radius: 4px;
+        width: 10px;
+        height: 10px;
+        margin: 2px;
+    }
+
+    QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+        background: #111827;
+        border-radius: 4px;
+    }
+
+    QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+        background: #4b5563;
+    }
+
+    QScrollBar::add-line, QScrollBar::sub-line {
+        width: 0;
+        height: 0;
+        background: transparent;
+    }
+
+    /* Status labels */
+    QLabel {
+        color: #e5e7eb;
+    }
+
+    QLabel[style*="color: red"] {
+        color: #f97373;
+    }
+
+    QLabel[style*="#0a7a0a"] {
+        color: #4ade80;
+    }
+
+    QTabWidget::pane {
+        border: 1px solid #111827;
+        border-radius: 14px;
+        background-color: #020617;
+    }
+
+    QTabBar::tab {
+        background-color: transparent;
+        color: #9ca3af;
+        padding: 6px 16px;
+        border-radius: 10px;
+        margin: 4px;
+    }
+
+    QTabBar::tab:selected {
+        background-color: #4f46e5;
+        color: #f9fafb;
+    }
+
+    QTabBar::tab:hover {
+        background-color: rgba(79,70,229,0.25);
+        color: #e5e7eb;
+    }
+    """)
+# =============================================================================
+
+
+
+# =============================================================================
+# weather helpers
+def fetch_weather_for_coords(lat, lon):
+    if lat is None or lon is None:
+        return None
+
+    params = {
+        "key": WEATHER_API_KEY,
+        "q": f"{lat},{lon}",
+        "aqi": "no",
+    }
+    try:
+        response = requests.get(WEATHER_API_URL, params=params, timeout=4)
+        if not response.ok:
+            print("WeatherAPI error:", response.text)
+            return None
+
+        content = json.loads(response.content)
+
+        return {
+            "location_name": content["location"]["name"],
+            "country": content["location"]["country"],
+            "temp_c": content["current"]["temp_c"],
+            "condition_text": content["current"]["condition"]["text"],
+            "icon_url": "http:" + content["current"]["condition"]["icon"],
+        }
+    except Exception as e:
+        print("Weather fetch failed:", e)
+        return None
+def get_real_location():
+    return 33.8938, 35.5018 #beirut loc
+def on_refresh_clicked(self):
+    lat, lon = self._get_lat_lon()
+    if lat is None or lon is None:
+        self.lbl_status.setText("Location not available")
         return
-    app.setStyle("Fusion")
-    if mode == "dark":
-        app.setStyleSheet(DARK_STYLESHEET)
-    else:
-        app.setStyleSheet(LIGHT_STYLESHEET)
 
-def excepthook(exc_type, exc, tb):
-    traceback.print_exception(exc_type, exc, tb)
-    QMessageBox.critical(None, "Unhandled Error", f"{exc_type.__name__}: {exc}")
-sys.excepthook = excepthook
+    self.lbl_status.setText("Fetching weather...")
+    info = fetch_weather_for_coords(lat, lon)
+    if not info:
+        self.lbl_status.setText("Failed to fetch weather.")
+        return
 
-def set_visible(widget, visible: bool):
-    widget.setVisible(visible)
+    self.lbl_status.setText(f"Weather for {info['location_name']}, {info['country']}")
+    self.lbl_details.setText(f"{info['temp_c']} °C – {info['condition_text']}")
+
+    
+    try:
+        icon_resp = requests.get(info["icon_url"], timeout=4)
+        pix = QPixmap()
+        pix.loadFromData(icon_resp.content)
+        self.lbl_icon.setPixmap(pix)
+    except:
+        pass
+# =============================================================================
+
+
+# ===== validation regex (mirror server) =====
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$")
+PASSWORD_RE = re.compile(r"^.{6,20}$")
+EMAIL_RE    = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
+
+
+
+# =============================================================================
+#
+class JsonlSession(QObject):
+    push_reveived = pyqtSignal(dict)
+    def __init__(self, host: str, port: int, timeout: float = 4.0, parent=None):
+        super().__init__(parent)
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.sock: socket.socket | None = None
+    
+    def handle_push(self, msg: dict):
+        #debug message
+        print("PUSH from server:", msg.get("type"), msg.get("payload", {}))
+        self.push_reveived.emit(msg)
+
+    def ensure_connected(self):
+        if self.sock is not None:
+            return
+        s = socket.create_connection((self.host, self.port), timeout=self.timeout)
+        s.settimeout(self.timeout)
+        self.sock = s
+
+    def request(self, env: dict) -> dict:
+        """Send 1 request, wait for 1 response, over the SAME socket. ignore push messages"""
+        if not isinstance(env, dict):
+            raise TypeError("JsonlSession.request expects a dict envelope")
+        
+        self.ensure_connected()
+
+        mid = env.get("id")
+        if not mid:
+            mid = str(uuid.uuid4())
+            env["id"] = mid
+
+        if "payload" not in env or env["payload"] is None:
+            env["payload"] = {}
+
+        send_json(self.sock, env)
+
+        while True:
+            msg = recv_json(self.sock)
+            if msg is None:
+                # timeout or EOF – adjust error handling
+                raise RuntimeError(f"Timeout or disconnect waiting for response to {env.get('type')}")
+            if msg.get("id") == mid:
+                return msg
+
+            # Otherwise, treat as push / unsolicited
+            t = msg.get("type")
+            if t in ("RIDE.MATCHED", "REQUEST.CLOSED", "DRIVER.BROADCAST", "PROFILE.UPDATED"):
+                self.handle_push(msg)
+                continue
+
+            # Stray message with some other id; log and ignore
+            logging.warning("JsonlSession: ignoring unsolicited message: %r", msg)
+
+
+      
+
+    def close(self):
+        try:
+            if self.sock:
+                self.sock.close()
+        finally:
+            self.sock = None
+# =============================================================================
+
+
+# =============================================================================
+class RegisterForm(QWidget):
+    def __init__(self, session = None, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        self.in_name = QLineEdit()
+        self.in_email = QLineEdit()
+        self.in_username = QLineEdit()
+        self.in_password = QLineEdit()
+        self.in_password.setEchoMode(QLineEdit.Password)
+        self.in_area = QLineEdit()
+        for w in (self.in_name, self.in_email, self.in_username, self.in_password, self.in_area):
+            w.setMinimumWidth(250)
+            w.setMaximumWidth(400)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setFormAlignment(Qt.AlignHCenter | Qt.AlignCenter)
+        form.setContentsMargins(0, 20, 0, 0)
+        form.setHorizontalSpacing(15)
+        form.setVerticalSpacing(10)
+        form.addRow("Name:", self.in_name)
+        form.addRow("Email:", self.in_email)
+        form.addRow("Username:", self.in_username)
+        form.addRow("Password:", self.in_password)
+        form.addRow("Area:", self.in_area)
+
+        self.err = QLabel("")
+        self.err.setWordWrap(True)
+        self.err.setStyleSheet("color: red;")
+        self.err.setVisible(False)
+
+        self.btn_register = QPushButton("Create account")
+        self.btn_register.setMinimumWidth(120)
+        self.btn_register.clicked.connect(self.on_submit)
+
+        card = QWidget()
+        card.setObjectName("register_card")
+        card.setStyleSheet("""
+            QWidget#register_card {
+                background-color: qradialgradient(
+                    cx:0.1, cy:0.0, radius:1.4,
+                    fx:0.0, fy:0.0,
+                    stop:0  rgba(129,140,248,0.25),
+                    stop:0.4 rgba(24,31,81,0.90),
+                    stop:1  #020617
+                );
+                border-radius: 20px;
+                border: 1px solid rgba(148,163,184,0.45);
+            }
+        """)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(30, 20, 30, 20)
+        lay.setSpacing(15)
+        lay.addLayout(form)
+        lay.addWidget(self.err)
+        lay.addSpacing(8)
+        lay.addWidget(self.btn_register, 0, Qt.AlignHCenter)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addStretch(1)
+        root.addWidget(card, 0, Qt.AlignHCenter)
+        root.addStretch(1)
+
+    def show_error(self, msg):
+        self.err.setText(msg)
+        self.err.setVisible(True)
+
+    def show_ok(self, msg):
+        self.err.setStyleSheet("color: #0a7a0a;")
+        self.err.setText(msg)
+        self.err.setVisible(True)
+
+
+    def clear_error(self):
+        self.err.setText("")
+        self.err.setVisible(False)
+
+    def validate(self):
+        name = self.in_name.text().strip()
+        email = self.in_email.text().strip()
+        username = self.in_username.text().strip()
+        password = self.in_password.text().strip()
+        area = self.in_area.text().strip()
+
+        if not name:
+            return False, "Name is required."
+        if not email or not EMAIL_RE.match(email):
+            return False, "Invalid email format."
+        if not username or not USERNAME_RE.match(username):
+            return False, "Username must be 5-20 characters (letters, digits, underscores)."
+        if not password or not PASSWORD_RE.match(password):
+            return False, "Password must be 6-20 characters."
+        if not area:
+            return False, "Area is required."
+
+        return True, {
+            "name": name,
+            "email": email,
+            "username": username,
+            "password": password,
+            "area": area
+        }
+
+    def jsonl_request(self, obj):
+        data = (json.dumps(obj, separators=(",", ":")) + "\n").encode(ENCODING)
+        with socket.create_connection((HOST, PORT), timeout=SOCKET_TIMEOUT) as s:
+            s.settimeout(SOCKET_TIMEOUT)
+            s.sendall(data)
+            buf = b""
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                if b"\n" in buf:
+                    line, _ = buf.split(b"\n", 1)
+                    txt = line.decode(ENCODING, errors="replace").rstrip("\r").strip()
+                    return json.loads(txt)
+        raise RuntimeError("No response from server")
+
+    def on_submit(self):
+        # 1) Read inputs
+        name = self.in_name.text().strip()
+        email = self.in_email.text().strip()
+        username = self.in_username.text().strip()
+        password = self.in_password.text()
+        area = self.in_area.text().strip()
+
+        # 2) Basic client-side validation
+        if not name:
+            self.show_error("Name is required.")
+            return
+        if not email:
+            self.show_error("Email is required.")
+            return
+        if not username:
+            self.show_error("Username is required.")
+            return
+        if not password:
+            self.show_error("Password is required.")
+            return
+        if not area:
+            self.show_error("Area is required.")
+            return
+
+        payload = {
+            "name": name,
+            "email": email,
+            "username": username,
+            "password": password,
+            "area": area,
+        }
+
+        req = {
+            "type": "AUTH.REGISTER_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": payload,
+        }
+
+        try:
+            # same session.request(...) you already use
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        rtype = resp.get("type")
+        p = resp.get("payload", {})
+
+        if rtype == "AUTH.REGISTER_RES":
+            # success toast / message
+            QMessageBox.information(self, "Success", "Account created. You can now log in.")
+
+
+            # clear form fields
+            self.in_name.clear()
+            self.in_email.clear()
+            self.in_username.clear()
+            self.in_password.clear()
+            self.in_area.clear()
+
+        elif rtype == "ERROR":
+            # server sends codes like AUTH_USERNAME_TAKEN, AUTH_EMAIL_TAKEN, BAD_REQUEST...
+            msg = p.get("message", "Failed to register.")
+            self.show_error(msg)
+        else:
+            self.show_error(f"Unexpected response: {rtype}")
+# =============================================================================
+
+
+
+# =============================================================================
+class LoginForm(QWidget):
+    logged_in = pyqtSignal(dict)  # emits user_preview dict
+
+    def __init__(self, session: JsonlSession, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        self.in_username = QLineEdit()
+        self.in_password = QLineEdit(); self.in_password.setEchoMode(QLineEdit.Password)
+        for w in (self.in_username, self.in_password): w.setMinimumWidth(250); w.setMaximumWidth(400)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setFormAlignment(Qt.AlignHCenter | Qt.AlignCenter)
+        form.setContentsMargins(0,20,0,0)
+        form.setHorizontalSpacing(15); form.setVerticalSpacing(10)
+        form.addRow("Username:", self.in_username)
+        form.addRow("Password:", self.in_password)
+
+        self.err = QLabel(""); self.err.setWordWrap(True); self.err.setStyleSheet("color: red;"); self.err.setVisible(False)
+        self.btn_login = QPushButton("Log into account"); self.btn_login.setMinimumWidth(120)
+        self.btn_login.clicked.connect(self.on_submit)
+
+        card = QWidget()
+        card.setObjectName("login_card")
+        card.setStyleSheet("""
+            QWidget#login_card {
+                background-color: qradialgradient(
+                    cx:0.9, cy:0.0, radius:1.4,
+                    fx:1.0, fy:0.0,
+                    stop:0  rgba(236,72,153,0.25),
+                    stop:0.4 rgba(24,31,81,0.90),
+                    stop:1  #020617
+                );
+                border-radius: 20px;
+                border: 1px solid rgba(148,163,184,0.45);
+            }
+        """)
+        lay = QVBoxLayout(card); lay.setContentsMargins(30,20,30,20); lay.setSpacing(15)
+        lay.addLayout(form); lay.addWidget(self.err); lay.addSpacing(8); lay.addWidget(self.btn_login,0,Qt.AlignHCenter)
+
+        root = QVBoxLayout(self); root.setContentsMargins(0,0,0,0)
+        root.addStretch(1); root.addWidget(card,0,Qt.AlignHCenter); root.addStretch(1)
+
+    def show_error(self, msg): self.err.setText(msg); self.err.setVisible(True)
+    def clear_error(self): self.err.setText(""); self.err.setVisible(False)
+
+    def validate(self):
+        u = self.in_username.text().strip()
+        p = self.in_password.text().strip()
+        if not u or not USERNAME_RE.match(u): return False, "Username is required."
+        if not p or not PASSWORD_RE.match(p): return False, "Password is required."
+        return True, {"username":u, "password":p}
+
+    def on_submit(self):
+        self.clear_error()
+        ok, payload_or_msg = self.validate()
+        if not ok:
+            self.show_error(payload_or_msg); return
+        req = {"type":"AUTH.LOGIN_REQ","id":str(uuid.uuid4()),"payload":payload_or_msg}
+        try:
+            resp = self.session.request(req)  # same socket stays open
+        except Exception as e:
+            self.show_error(f"Network error: {e}"); return
+        rtype = resp.get("type")
+        payload = resp.get("payload",{})
+        if rtype == "AUTH.LOGIN_RES":
+            user_preview = payload.get("user", {})
+            self.logged_in.emit(user_preview)
+            self.in_username.clear(); self.in_password.clear()
+        elif rtype == "ERROR":
+            self.show_error(payload.get("message","Unknown error"))
+        else:
+            self.show_error(f"Unexpected response: {rtype}")
+# =============================================================================
+
+
+
+# =============================================================================
+class ProfileScreen(QWidget):
+    driverModeChanged = pyqtSignal(bool)  # emit after successful save
+
+    def __init__(self, session: JsonlSession, user_preview: dict, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        self.snapshot = {
+            "name": user_preview.get("name", ""),
+            "email": user_preview.get("email", ""),
+            "area": user_preview.get("area", ""),
+            "is_driver": bool(user_preview.get("is_driver", False)),
+            "rating_avg": user_preview.get("rating_avg", 0.0),
+            "rating_count": user_preview.get("rating_count", 0),
+            
+        }
+
+        self.in_name = QLineEdit(self.snapshot["name"])
+        self.in_name.setObjectName("profileField")
+        self.in_email = QLineEdit(self.snapshot["email"])
+        self.in_email.setObjectName("profileField")
+        self.in_area = QLineEdit(self.snapshot["area"])
+        self.in_area.setObjectName("profileField")
+        self.chk_driver = QCheckBox("Driver Mode")
+        self.chk_driver.setChecked(self.snapshot["is_driver"])
+
+        # Stronger style just for the 3 profile fields bc i cant figure out where you put the styling for them joe T_T
+        profile_field_css = """
+        QLineEdit#profileField,
+        QLineEdit#profileField:disabled,
+        QLineEdit#profileField:read-only {
+            background-color: rgba(255,255,255,0.14);
+            border: 1px solid rgba(148,163,184,0.75);  
+            color: #f9fafb;                             
+        }
+
+        QLineEdit#profileField:focus {
+            border: 1px solid #6366f1;
+            background-color: rgba(255,255,255,0.18);
+        }
+        """
+
+        self.in_name.setStyleSheet(profile_field_css)
+        self.in_email.setStyleSheet(profile_field_css)
+        self.in_area.setStyleSheet(profile_field_css)
+
+
+        for w in (self.in_name, self.in_email, self.in_area):
+            w.setMinimumWidth(300); w.setMaximumWidth(420)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setFormAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        form.setHorizontalSpacing(14); form.setVerticalSpacing(10)
+        form.addRow("Name:", self.in_name)
+        form.addRow("Email:", self.in_email)
+        form.addRow("Area:", self.in_area)
+        self.rating_label = QLabel("")
+        self.rating_label.setStyleSheet("font-size: 11pt; color: #e5e7eb;")
+        form.addRow("Rating:", self.rating_label)
+
+        self._update_rating_label()
+        form.addRow("", self.chk_driver)
+
+        self.err = QLabel(""); self.err.setWordWrap(True); self.err.setStyleSheet("color: red;"); self.err.setVisible(False)
+        self.ok = QLabel(""); self.ok.setWordWrap(True); self.ok.setStyleSheet("color: #0a7a0a;"); self.ok.setVisible(False)
+
+        self.weather_icon = QLabel()
+        self.weather_icon.setFixedSize(48,48)
+        self.weather_icon.setScaledContents(True)
+
+        self.weather_label = QLabel("")
+        self.weather_label.setWordWrap(False)
+
+        weather_row = QHBoxLayout()
+        weather_row.addWidget(self.weather_icon)
+        weather_row.addWidget(self.weather_label,1)
+
+        
+
+        self.btn_edit = QPushButton("Edit")
+        self.btn_save = QPushButton("Save")
+        self.btn_cancel = QPushButton("Cancel")
+
+        self.btn_edit.clicked.connect(self.on_edit)
+        self.btn_save.clicked.connect(self.on_save)
+        self.btn_cancel.clicked.connect(self.on_cancel)
+
+        root = QVBoxLayout(self)
+        root.addSpacing(10)
+        root.addLayout(form)
+        root.addWidget(self.err)
+        root.addWidget(self.ok)
+        root.addSpacing(8)
+
+        root.addLayout(weather_row)
+
+        root.addSpacing(12)
+        
+        
+        root.addSpacing(8)
+
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.btn_edit)
+        buttons.addWidget(self.btn_save)
+        buttons.addWidget(self.btn_cancel)
+        root.addLayout(buttons)
+        root.addStretch(1)
+
+        self.set_edit_mode(False)
+        self.on_weather_clicked()
+
+    def set_edit_mode(self, on: bool):
+        editing = bool(on)
+        for w in (self.in_name, self.in_email, self.in_area):
+            w.setReadOnly(not editing)
+        self.chk_driver.setEnabled(editing)
+
+        self.btn_edit.setEnabled(not editing)
+        self.btn_save.setEnabled(editing)
+        self.btn_cancel.setEnabled(editing)
+
+        
+
+    def reset_fields_from_snapshot(self):
+        self.in_name.setText(self.snapshot["name"])
+        self.in_email.setText(self.snapshot["email"])
+        self.in_area.setText(self.snapshot["area"])
+        self.chk_driver.setChecked(self.snapshot["is_driver"])
+
+    def show_error(self, msg):
+        self.err.setText(msg); self.err.setVisible(True); self.ok.setVisible(False)
+
+    def show_ok(self, msg):
+        self.ok.setText(msg); self.ok.setVisible(True); self.err.setVisible(False)
+
+    def on_edit(self):
+        self.reset_fields_from_snapshot()
+        self.set_edit_mode(True)
+
+    def on_cancel(self):
+        self.reset_fields_from_snapshot()
+        self.set_edit_mode(False)
+
+    def on_save(self):
+        area = self.in_area.text().strip()
+        if not area:
+            self.show_error("Area is required")
+            return
+
+        payload = {
+            "name": self.in_name.text().strip(),
+            "email": self.in_email.text().strip(),
+            "area": area,
+            "is_driver": bool(self.chk_driver.isChecked())
+        }
+        req = {"type":"PROFILE.SET_REQ", "id": str(uuid.uuid4()), "payload": payload}
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        if resp.get("type") == "PROFILE.SET_RES":
+            prev_driver = self.snapshot["is_driver"]
+            self.snapshot.update(payload)
+            self.set_edit_mode(False)
+            self.show_ok("Profile saved.")
+            if prev_driver != self.snapshot["is_driver"]:
+                self.driverModeChanged.emit(self.snapshot["is_driver"])
+            self._update_rating_label()
+  
+        elif resp.get("type") == "ERROR":
+            self.show_error(resp.get("payload", {}).get("message", "Failed to save profile."))
+        else:
+            self.show_error(f"Unexpected response: {resp.get('type')}")
+
+    def on_weather_clicked(self):
+        #bei loc
+        lat, lon = 33.8938, 35.5018
+
+        
+        self.weather_label.setWordWrap(False)
+        self.weather_label.setText("Today's weather in Beirut - loading...")
+        self.weather_icon.clear()
+
+        info = fetch_weather_for_coords(lat, lon)
+        if not info:
+            self.weather_label.setText("Today's weather in Beirut - unavailable.")
+            return
+
+        self.weather_label.setWordWrap(False) 
+        self.weather_label.setText(
+            f" Today's weather in Beirut - {info['temp_c']}°C — {info['condition_text']}"
+        )
+
+        try:
+            icon_resp = requests.get(info["icon_url"], timeout=4)
+            pix = QPixmap()
+            pix.loadFromData(icon_resp.content)
+            self.weather_icon.setPixmap(pix)
+        except Exception as e:
+            print("Weather icon failed:", e)
+
+    def _update_rating_label(self):
+        avg = self.snapshot.get("rating_avg")
+        count = self.snapshot.get("rating_count")
+
+        if count is None or count == 0:
+            self.rating_label.setText("No ratings yet")
+            return
+
+        # format avg to 1 decimal place
+        avg_str = f"{avg:.1f}"
+        self.rating_label.setText(f"{avg_str} ★ ({count})")
+
+    def update_from_user_preview(self, preview: dict):
+        """
+        Update the profile fields when RIDE.RATE_RES returns new rating info.
+        """
+        self.snapshot["rating_avg"] = preview.get("rating_avg", self.snapshot.get("rating_avg"))
+        self.snapshot["rating_count"] = preview.get("rating_count", self.snapshot.get("rating_count"))
+
+
+        # Update the rating label
+        self._update_rating_label()
+# =============================================================================
+
+
+# =============================================================================
+class ScheduleScreen(QWidget):
+    """Driver schedule CRUD using persistent TCP connection."""
+    def __init__(self, session: JsonlSession, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        self.selected_lat = None
+        self.selected_lon = None
+
+        form = QHBoxLayout()
+
+        self.cb_weekday = QComboBox()
+        self.cb_weekday.addItems(["Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"])
+
+        self.time_edit = QTimeEdit()
+        self.time_edit.setDisplayFormat("HH:mm")
+        self.time_edit.setKeyboardTracking(False)
+
+        self.cb_direction = QComboBox()
+        self.cb_direction.addItems(["to_AUB", "from_AUB"])
+        self.cb_direction.currentTextChanged.connect(self._update_direction_hints)
+
+
+        self.in_area = QLineEdit()
+        self.in_area.setPlaceholderText("e.g Hamra")
+
+        self.btn_pick_location = QPushButton("Pick location on map")
+        self.btn_pick_location.clicked.connect(self.open_map)
+
+        self.btn_add = QPushButton("Add")
+        self.btn_add.clicked.connect(self.on_add_slot)
+
+        self._update_direction_hints()
+
+
+        for w in (self.cb_weekday, self.time_edit, self.cb_direction, self.in_area,
+                  self.btn_pick_location, self.btn_add):
+            form.addWidget(w)
+
+        self.err = QLabel("")
+        self.err.setWordWrap(True)
+        self.err.setStyleSheet("color: red;")
+        self.err.setVisible(False)
+
+        self.ok = QLabel("")
+        self.ok.setWordWrap(True)
+        self.ok.setStyleSheet("color: green;")
+        self.ok.setVisible(False)
+
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Weekday", "Time", "Direction", "Area"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+
+        btns = QHBoxLayout()
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_delete = QPushButton("Delete Selected")
+        self.btn_refresh.clicked.connect(self.refresh)
+        self.btn_delete.clicked.connect(self.on_delete_selected)
+        btns.addWidget(self.btn_refresh)
+        btns.addWidget(self.btn_delete)
+        btns.addStretch(1)
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(self.err)
+        root.addWidget(self.ok)
+        root.addSpacing(8)
+
+        
+        root.addWidget(self.table, 1)
+        root.addLayout(btns)
+
+        self.refresh()
+
+    # ---- map picking ----
+    def open_map(self):
+        dlg = MapSelector(self)
+
+        # (optional) tweak text based on direction
+        direction = self.cb_direction.currentText()
+        if direction == "to_AUB":
+            dlg.setWindowTitle("Select your pickup location")
+            dlg.label.setText("Try to approximately locate where you will be picked up (your current location).")
+        else:
+            dlg.setWindowTitle("Select your drop-off location")
+            dlg.label.setText("Try to approximately locate where you will be dropped off.")
+
+        dlg.location_selected.connect(self.on_location_picked)
+        dlg.showMaximized()   # important: so showEvent sees the max size
+        dlg.exec_()
+
+    def on_location_picked(self, lat, lon):
+        self.selected_lat = lat
+        self.selected_lon = lon
+        self.show_ok(f"Pickup location selected ✓ (lat={lat:.5f}, lon={lon:.5f})")
+
+    # ---- helpers ----
+    def show_error(self, msg):
+        self.err.setText(msg)
+        self.err.setVisible(True)
+        self.ok.setVisible(False)
+
+    def show_ok(self, msg):
+        self.ok.setText(msg)
+        self.ok.setVisible(True)
+        self.err.setVisible(False)
+
+    def _weekday_index(self):
+        return self.cb_weekday.currentIndex()
+
+    def _time_str(self):
+        return self.time_edit.time().toString("HH:mm")
+    
+    def _update_direction_hints(self):
+        direction = self.cb_direction.currentText()
+        if direction == "to_AUB":
+            # Driver is going TO campus; pin = origin
+            self.in_area.setPlaceholderText("From where are you driving? (e.g. Hamra)")
+            self.btn_pick_location.setText("Pick starting point on map")
+        else:
+            # Driver is leaving AUB; pin = destination
+            self.in_area.setPlaceholderText("Where are you dropping off? (e.g. Hamra)")
+            self.btn_pick_location.setText("Pick drop-off area on map")
+
+
+    # ---- CRUD ----
+    def refresh(self):
+        current_row = self.table.currentRow()
+        selected_sched_id = None
+        if current_row >= 0:
+            item0 = self.table.item(current_row, 0)
+            if item0 is not None:
+                selected_sched_id = item0.data(Qt.UserRole)
+
+        req = {
+            "type": "SCHEDULE.LIST_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {}
+        }
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        if resp.get("type") != "SCHEDULE.LIST_RES":
+            self.show_error(
+                resp.get("payload", {}).get(
+                    "message",
+                    f"Unexpected response: {resp.get('type')}"
+                )
+            )
+            return
+
+        items = resp.get("payload", {}).get("items", [])
+        self.table.setRowCount(0)
+
+        for item in items:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+
+            wd_idx = item["weekday"]
+            wd = ["Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"][wd_idx] \
+                if 0 <= wd_idx <= 6 else str(wd_idx)
+
+            c0 = QTableWidgetItem(wd)
+            c0.setData(Qt.UserRole, item["schedule_id"])
+
+            self.table.setItem(row, 0, c0)
+            self.table.setItem(row, 1, QTableWidgetItem(item["depart_time"]))
+            self.table.setItem(row, 2, QTableWidgetItem(item["direction"]))
+            self.table.setItem(row, 3, QTableWidgetItem(item["area"]))
+
+        if selected_sched_id is not None:
+            for row in range(self.table.rowCount()):
+                item0 = self.table.item(row, 0)
+                if item0 is not None and item0.data(Qt.UserRole) == selected_sched_id:
+                    self.table.setCurrentCell(row, 0)
+                    break
+
+    def on_add_slot(self):
+        area = self.in_area.text().strip()
+        if not area:
+            self.show_error("Area is required (for display).")
+            return
+
+        if self.selected_lat is None or self.selected_lon is None:
+            self.show_error("Please pick a map location for this schedule.")
+            return
+
+        payload = {
+            "weekday": self._weekday_index(),
+            "depart_time": self._time_str(),
+            "direction": self.cb_direction.currentText(),
+            "area": area,
+            "lat": float(self.selected_lat),
+            "lon": float(self.selected_lon),
+        }
+
+        req = {"type": "SCHEDULE.SET_REQ", "id": str(uuid.uuid4()), "payload": payload}
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        if resp.get("type") == "SCHEDULE.SET_RES":
+            self.show_ok("Slot added.")
+            self.refresh()
+        else:
+            payload = resp.get("payload", {})
+            if payload.get("code") == "SCHEDULE_DUPLICATE":
+                self.show_error("You have already added this exact slot, change any field to add a new one")
+            else:
+                self.show_error(resp.get("payload", {}).get("message", "Failed to add slot."))
+
+    def on_delete_selected(self):
+        r = self.table.currentRow()
+        if r < 0:
+            self.show_error("Select a row to delete.")
+            return
+
+        sid = self.table.item(r, 0).data(Qt.UserRole)
+        if not isinstance(sid, int):
+            self.show_error("Internal error: missing schedule_id.")
+            return
+        req = {"type": "SCHEDULE.REMOVE_REQ", "id": str(uuid.uuid4()), "payload": {"schedule_id": sid}}
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        if resp.get("type") == "SCHEDULE.REMOVE_RES":
+            self.show_ok("Slot deleted.")
+            self.refresh()
+        else:
+            self.show_error(resp.get("payload", {}).get("message", "Failed to delete slot."))
+# =============================================================================
+
+
+
+# =============================================================================
+class TrueFalseQuizWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # ---- Card container ----
+        card = QFrame(self)
+        card.setFrameShape(QFrame.StyledPanel)
+        card.setObjectName("quizCard")
+
+        outer = QVBoxLayout(self)
+        outer.addWidget(card)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        self.title = QLabel("A Networking Game: True or False?")
+        self.title.setObjectName("quizTitle")
+        self.title.setAlignment(Qt.AlignCenter)
+
+        self.question_label = QLabel("")
+        self.question_label.setObjectName("quizQuestion")
+        self.question_label.setWordWrap(True)
+        self.question_label.setAlignment(Qt.AlignCenter)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
+
+        self.btn_true = QPushButton("True")
+        self.btn_false = QPushButton("False")
+
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.btn_true)
+        btn_row.addWidget(self.btn_false)
+        btn_row.addStretch(1)
+
+        self.feedback = QLabel("")
+        self.feedback.setObjectName("quizFeedback")
+        self.feedback.setWordWrap(True)
+        self.feedback.setAlignment(Qt.AlignCenter)
+
+        layout.addWidget(self.title)
+        layout.addWidget(self.question_label)
+        layout.addLayout(btn_row)
+        layout.addWidget(self.feedback)
+
+        # ---- Data ----
+        self.questions = [
+            {"text": "Wi-Fi is short for 'Wireless Fidelity'.", "answer": False,
+             "explanation": "It's just a brand name, it doesn’t officially stand for anything."},
+            {"text": "TCP is designed to provide reliable, ordered delivery of data between applications.", "answer": True,
+             "explanation": "TCP handles acknowledgements, retransmissions, and ordering."},
+            {"text": "UDP guarantees that packets arrive in the correct order.", "answer": False,
+             "explanation": "UDP is connectionless and doesn’t guarantee delivery or order."},
+            {"text": "DNS is used to translate human-readable names like example.com into IP addresses.", "answer": True,
+             "explanation": "Exactly – it’s basically the Internet’s phonebook."},
+            {"text": "IPv4 has more available addresses than IPv6.", "answer": False,
+             "explanation": "IPv6 has an astronomically larger address space than IPv4."},
+            {"text": "A MAC address operates at Layer 2 of the OSI model.", "answer": True,
+             "explanation": "MAC addresses belong to the Data Link layer."},
+            {"text": "The loopback IP address 127.0.0.1 always refers to the local machine.", "answer": True,
+             "explanation": "Loopback lets a host send packets to itself."},
+            {"text": "HTTP by itself encrypts all web traffic.", "answer": False,
+             "explanation": "Only HTTPS (HTTP over TLS) provides encryption."},
+            {"text": "Port 443 is the default port for HTTPS.", "answer": True,
+             "explanation": "HTTP usually uses 80, HTTPS uses 443."},
+            {"text": "Ping is typically implemented using the ICMP protocol.", "answer": True,
+             "explanation": "Ping sends ICMP Echo Request and listens for Echo Reply."},
+            {"text": "NAT allows multiple devices to share one public IPv4 address.", "answer": True,
+             "explanation": "That’s how most home routers work today."},
+            {"text": "A switch normally works at the same OSI layer as a router.", "answer": False,
+             "explanation": "A switch is Layer 2; a router is Layer 3 (in classic terms)."},
+            {"text": "VLANs let you logically split one physical network into multiple virtual networks.", "answer": True,
+             "explanation": "They isolate broadcast domains and traffic."},
+            {"text": "Traceroute can show the sequence of routers a packet passes through.", "answer": True,
+             "explanation": "Each hop along the path can respond with an ICMP message."},
+            {"text": "2.4 GHz Wi-Fi usually has longer range than 5 GHz Wi-Fi.", "answer": True,
+             "explanation": "Lower frequencies penetrate walls better but offer less throughput."},
+            {"text": "Packet loss will never affect real-time voice or gaming traffic.", "answer": False,
+             "explanation": "Even small packet loss can cause lag, glitches, and stutter."},
+            {"text": "A default gateway is typically a switch on the network.", "answer": False,
+             "explanation": "The default gateway is usually a router, not a switch."},
+            {"text": "ARP is used to map IP addresses to MAC addresses on a local network.", "answer": True,
+             "explanation": "It’s how hosts learn each other’s MAC addresses."},
+            {"text": "VPNs create encrypted tunnels that can make remote networks appear local.", "answer": True,
+             "explanation": "Your device behaves like it is inside that remote network."},
+            {"text": "A higher bandwidth link always means lower latency.", "answer": False,
+             "explanation": "Bandwidth is capacity; latency is delay. They are related but different."},
+            {"text": "BGP is the routing protocol that connects large networks and ISPs together.", "answer": True,
+             "explanation": "BGP is the backbone protocol of the global Internet."},
+            {"text": "Firewalls can filter traffic based on ports, IPs, and protocols.", "answer": True,
+             "explanation": "They enforce security policies at network boundaries."},
+            {"text": "Undersea fiber-optic cables carry most long-distance Internet traffic.", "answer": True,
+             "explanation": "Satellite is used too, but the majority is via undersea cables."},
+            {"text": "QoS (Quality of Service) is used to make downloads faster at all costs.", "answer": False,
+             "explanation": "QoS is about prioritization, e.g., giving voice higher priority than bulk transfers."},
+            {"text": "An SSID is the visible “name” of a Wi-Fi network.", "answer": True,
+             "explanation": "That’s what you see when you scan for networks on your phone."},
+            {"text": "Mesh Wi-Fi systems use multiple nodes to improve coverage in larger spaces.", "answer": True,
+             "explanation": "They help avoid dead zones in big apartments or houses."},
+            {"text": "MAC addresses are always globally unique in practice, with no exceptions.", "answer": False,
+             "explanation": "They are designed to be unique, but collisions and spoofing can happen."},
+            {"text": "DHCP is responsible for dynamically assigning IP addresses to clients.", "answer": True,
+             "explanation": "It saves you from configuring every IP manually."},
+            {"text": "CDNs (Content Delivery Networks) typically slow down website loading times.", "answer": False,
+             "explanation": "They speed things up by serving content from closer locations."},
+            {"text": "The OSI model has 7 layers, including Application, Transport, and Network.", "answer": True,
+             "explanation": "It’s a conceptual framework used to understand networking."},
+        ]
+
+        self._last_index = None
+        self._current_question = None
+
+        # ---- Connections ----
+        self.btn_true.clicked.connect(lambda: self.check_answer(True))
+        self.btn_false.clicked.connect(lambda: self.check_answer(False))
+
+        self.next_question()
+
+
+    def next_question(self):
+        if not self.questions:
+            self.question_label.setText("No questions loaded.")
+            self.feedback.setText("")
+            return
+
+        if len(self.questions) == 1:
+            idx = 0
+        else:
+            while True:
+                idx = random.randint(0, len(self.questions) - 1)
+                if idx != self._last_index:
+                    break
+
+        self._last_index = idx
+        self._current_question = self.questions[idx]
+        self.question_label.setText(self._current_question["text"])
+        self.feedback.setText("Are you right?")
+
+    def check_answer(self, user_answer: bool):
+        if not self._current_question:
+            return
+
+        correct = self._current_question["answer"]
+        explanation = self._current_question.get("explanation", "")
+
+        if user_answer == correct:
+            self.feedback.setStyleSheet("QLabel#quizFeedback { color: #1b7e1b; }")
+            self.feedback.setText(f"✅ Correct! {explanation}")
+        else:
+            self.feedback.setStyleSheet("QLabel#quizFeedback { color: #b02020; }")
+            self.feedback.setText(f"❌ Not quite. {explanation}")
+        self.next_question()
+#=============================================================================
+
+
+
+# =============================================================================
+class RideRequestPage(QWidget):
+    def __init__(self, session: JsonlSession, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        # ---- Coordinates from map ----
+        self.selected_lat = None
+        self.selected_lon = None
+
+        self.btn_pick_location = QPushButton("Pick location on map")
+        self.btn_pick_location.clicked.connect(self.open_map)
+
+        # ---- Polling setup ----
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(3000)
+        self.poll_timer.timeout.connect(self._poll_for_match)
+
+        self.current_request_id: str | None = None
+
+        # ---- Form fields ----
+        self.in_area = QLineEdit()
+        self.in_area.setPlaceholderText("e.g Hamra")
+
+        self.cb_direction = QComboBox()
+        self.cb_direction.addItems(["to_AUB", "from_AUB"])
+        self.cb_direction.currentTextChanged.connect(self._update_direction_hints)
+
+        #rating
+        self.cb_min_driver_rating = QComboBox()
+        self.cb_min_driver_rating.addItem("Any driver rating", None)
+        for stars in range(1, 6):
+            self.cb_min_driver_rating.addItem(f"{stars}+ stars", float(stars))
+
+
+        self.dt = QDateTimeEdit(QDateTime.currentDateTime())
+        self.dt.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.dt.setCalendarPopup(True)
+        self.dt.setKeyboardTracking(False)
+
+        self.btn_submit = QPushButton("Request Ride")
+        self.btn_submit.clicked.connect(self.on_submit)
+
+        self.btn_cancel = QPushButton("Cancel request")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.on_cancel_clicked)
+        self._update_direction_hints()
+
+
+        # ---- Layout ----
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setFormAlignment(Qt.AlignCenter | Qt.AlignTop)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+
+        form.addRow("Area:", self.in_area)
+        form.addRow("", self.btn_pick_location)       # MAP BUTTON HERE
+        form.addRow("Direction:", self.cb_direction)
+        form.addRow("Min driver rating:", self.cb_min_driver_rating)
+        form.addRow("Departure Time:", self.dt)
+
+        self.err = QLabel("")
+        self.err.setWordWrap(True)
+        self.err.setStyleSheet("color: red;")
+        self.err.setVisible(False)
+
+        self.ok = QLabel("")
+        self.ok.setWordWrap(True)
+        self.ok.setStyleSheet("color: #0a7a0a;")
+        self.ok.setVisible(False)
+
+        self.lbl_request_id = QLabel("Request ID: —")
+        self.lbl_status = QLabel("Status: —")
+
+        self.quiz = TrueFalseQuizWidget(self)
+        self.quiz.setVisible(False)
+
+        # ---- Root ----
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.btn_submit)
+        row.addWidget(self.btn_cancel)
+        row.addStretch(1)
+        root.addLayout(row)
+
+        root.addSpacing(10)
+        root.addWidget(self.err)
+        root.addWidget(self.ok)
+        root.addSpacing(12)
+        root.addWidget(self.lbl_request_id)
+        root.addWidget(self.lbl_status)
+        root.addWidget(self.quiz)
+        root.addStretch(1)
+
+        self.set_idle_state()
+
+    # =====================================================================
+    # Helpers
+    # =====================================================================
+    def show_error(self, msg):
+        self.err.setText(msg)
+        self.err.setVisible(True)
+        self.ok.setVisible(False)
+
+    def show_ok(self, msg):
+        self.ok.setText(msg)
+        self.ok.setVisible(True)
+        self.err.setVisible(False)
+
+    def _iso_string(self) -> str:
+        return self.dt.dateTime().toString("yyyy-MM-dd HH:mm")
+    
+    def _min_driver_rating(self):
+        idx = self.cb_min_driver_rating.currentIndex()
+        val = self.cb_min_driver_rating.itemData(idx)
+        if isinstance(val, (int, float)):
+            return float(val)
+        return None
+
+
+    # =====================================================================
+    # MAP HANDLERS
+    # =====================================================================
+    def open_map(self):
+        dlg = MapSelector(self)
+
+        # (optional) tweak text based on direction
+        direction = self.cb_direction.currentText()
+        if direction == "to_AUB":
+            dlg.setWindowTitle("Select your pickup location")
+            dlg.label.setText("Try to approximately locate where you will be picked up (your current location).")
+        else:
+            dlg.setWindowTitle("Select your drop-off location")
+            dlg.label.setText("Try to approximately locate where you will be dropped off.")
+
+        dlg.location_selected.connect(self.on_location_picked)
+        dlg.showMaximized()   # important: so showEvent sees the max size
+        dlg.exec_()
+
+
+    def on_location_picked(self, lat, lon):
+        self.selected_lat = lat
+        self.selected_lon = lon
+        self.show_ok(f"Location selected ✓ (lat={lat:.5f}, lon={lon:.5f})")
+
+        if hasattr(self, "map_dialog"):
+            self.map_dialog.close()
+        
+    def _update_direction_hints(self):
+        direction = self.cb_direction.currentText()
+        if direction == "to_AUB":
+            # Passenger is off-campus, going TO AUB
+            self.in_area.setPlaceholderText("Where are you now? (e.g. Hamra)")
+            self.btn_pick_location.setText("Pick your pickup location on map")
+        else:
+            # Passenger is at AUB, going somewhere else
+            self.in_area.setPlaceholderText("Where are you going? (e.g. Hamra)")
+            self.btn_pick_location.setText("Pick your drop-off location on map")
+
+
+    # =====================================================================
+    # SUBMIT REQUEST
+    # =====================================================================
+    def on_submit(self):
+        self.err.setVisible(False)
+        self.ok.setVisible(False)
+
+        area = self.in_area.text().strip()
+        if not area:
+            self.show_error("Area is required (for info).")
+            return
+
+        if self.selected_lat is None or self.selected_lon is None:
+            self.show_error("Please pick your location on the map.")
+            return
+
+        payload = {
+            "area": area,  # kept for display, NOT used for matching
+            "direction": self.cb_direction.currentText(),
+            "time_iso": self._iso_string(),
+            "lat": float(self.selected_lat),
+            "lon": float(self.selected_lon),
+        }
+
+        min_rating = self._min_driver_rating()
+        if min_rating is not None:
+            payload["min_driver_rating"] = min_rating
+
+        req = {"type": "RIDE.REQUEST_REQ", "id": str(uuid.uuid4()), "payload": payload}
+
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        rtype = resp.get("type")
+        p = resp.get("payload", {})
+
+        if rtype == "RIDE.REQUEST_RES":
+            req_id = p.get("request_id")
+            found  = p.get("candidates_found", 0)
+
+            self.current_request_id = req_id
+            self.btn_cancel.setEnabled(True)
+            self.btn_submit.setEnabled(False)
+
+            self.lbl_request_id.setText(f"Request ID: {req_id}")
+            self.lbl_status.setText(f"Status: open — compatible drivers found: {found}")
+            self.show_ok("Ride request created.")
+            self.poll_timer.start()
+            self.quiz.setVisible(True)
+
+
+        elif rtype == "ERROR":
+            code = p.get("code")
+            msg = p.get("message", "Failed to create ride request")
+            if code == "PASSENGER_BUSY":
+                self.current_request_id = None
+                self.btn_cancel.setEnabled(False)
+            self.show_error(msg)
+        else:
+            self.show_error(f"Unexpected response: {rtype}")
+
+    # =====================================================================
+    # CANCEL REQUEST
+    # =====================================================================
+    def on_cancel_clicked(self):
+        if not self.current_request_id:
+            self.show_error("No active request to cancel.")
+            return
+
+        req = {
+            "type": "RIDE.CANCEL_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {"request_id": self.current_request_id},
+        }
+
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        rtype = resp.get("type")
+        payload = resp.get("payload", {})
+
+        if rtype == "RIDE.CANCEL_RES":
+            self.current_request_id = None
+            self.set_idle_state()
+            QMessageBox.information(self, "Request Cancelled", "Your ride request has been cancelled.")
+
+        elif rtype == "ERROR":
+            code = payload.get("code")
+            msg = payload.get("message", "Unknown error")
+
+            if code == "INVALID_STATE":
+                QMessageBox.information(self, "Cannot cancel",
+                    "Your request has already been accepted by a driver.")
+                return
+
+            QMessageBox.warning(self, "Cancel failed",
+                f"Server returned error: {code or 'ERROR'} - {msg}")
+
+        else:
+            QMessageBox.warning(self, "Unexpected reply",
+                f"Unexpected response to cancel: {rtype}")
+
+    # =====================================================================
+    # STATE HANDLING
+    # =====================================================================
+    def handle_matched(self, payload):
+        self.lbl_status.setText("Status: A driver has accepted your request!")
+        self.btn_cancel.setEnabled(False)
+        self.quiz.setVisible(False)
+
+    def set_idle_state(self):
+        self.current_request_id = None
+
+        try: self.poll_timer.stop()
+        except: pass
+
+        self.btn_cancel.setEnabled(False)
+        self.btn_submit.setEnabled(True)
+
+        self.lbl_request_id.setText("Request ID: —")
+        self.lbl_status.setText("Status: —")
+        self.quiz.setVisible(False)
+
+
+    # =====================================================================
+    # POLLING (keeps reading matched notifications)
+    # =====================================================================
+    def _poll_for_match(self):
+        if not self.current_request_id:
+            return
+        try:
+            req = {"type": "PING", "id": str(uuid.uuid4()), "payload": {}}
+            self.session.request(req)
+        except Exception as e:
+            print(f"poll_for_match error: {e}")
+# =============================================================================
+
+
+
+# =============================================================================
+# requests table
+class DriverRidePage(QWidget):
+    rideAccepted = pyqtSignal(str, dict)  # emit request_id when a ride is accepted
+    def __init__(self, session: JsonlSession, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        # Rating filter: only show requests from passengers above threshold
+        self.cb_min_passenger_rating = QComboBox()
+        self.cb_min_passenger_rating.addItem("Any passenger rating", None)
+        for stars in range(1, 6):
+            self.cb_min_passenger_rating.addItem(f"{stars}+ stars", float(stars))
+
+
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Request ID", "Area", "Direction", "Departure Time"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+
+        self.err = QLabel("")
+        self.err.setWordWrap(True)
+        self.err.setStyleSheet("color: red;")
+        self.err.setVisible(False)
+
+        self.ok = QLabel("")
+        self.ok.setWordWrap(True)
+        self.ok.setStyleSheet("color: #0a7a0a;")
+        self.ok.setVisible(False)
+
+        self.btn_refresh = QPushButton("Refresh now")
+        self.btn_accept = QPushButton("Accept selected")
+
+        self.btn_refresh.clicked.connect(self.refresh)
+        self.btn_accept.clicked.connect(self.on_accept_selected)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Filter:"))
+        top.addWidget(self.cb_min_passenger_rating)
+        top.addSpacing(12)
+        top.addWidget(self.btn_refresh)
+        top.addWidget(self.btn_accept)
+        top.addStretch(1)
+
+        root = QVBoxLayout(self)
+        root.addLayout(top)
+        root.addWidget(self.err)
+        root.addWidget(self.ok)
+        root.addSpacing(6)
+        root.addWidget(self.table, 1)
+
+        # auto-refresh every 5 seconds
+        self.timer = QTimer(self)
+        self.timer.setInterval(5000)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start()
+
+        self.refresh()
+
+    def show_error(self, msg):
+        self.err.setText(msg)
+        self.err.setVisible(True)
+        self.ok.setVisible(False)
+
+    def show_ok(self, msg):
+        self.ok.setText(msg)
+        self.ok.setVisible(True)
+        self.err.setVisible(False)
+
+    def refresh(self):
+
+        payload = {}
+        min_rating = self._min_passenger_rating()
+        if min_rating is not None:
+            payload["min_passenger_rating"] = min_rating
+
+        req = {
+            "type": "RIDE.LIST_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": payload,
+        }
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        if resp.get("type") != "RIDE.LIST_RES":
+            self.show_error(resp.get("payload", {}).get("message", f"Unexpected response: {resp.get('type')}"))
+            return
+
+        items = resp.get("payload", {}).get("items", [])
+        self.table.setRowCount(0)
+
+        for item in items:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+
+            req_id = item.get("request_id", "—")
+            area = item.get("area", "—")
+            direction = item.get("direction", "—")
+            time_iso = item.get("time_iso", "—")
+
+            c0 = QTableWidgetItem(req_id)
+            # store raw request_id in UserRole, to send later
+            c0.setData(Qt.UserRole, req_id)
+
+            self.table.setItem(row, 0, c0)
+            self.table.setItem(row, 1, QTableWidgetItem(area))
+            self.table.setItem(row, 2, QTableWidgetItem(direction))
+            self.table.setItem(row, 3, QTableWidgetItem(time_iso))
+
+        self.show_ok(f"Loaded {len(items)} compatible requests.")
+
+    def on_accept_selected(self):
+        r = self.table.currentRow()
+        if r < 0:
+            self.show_error("Select a request to accept.")
+            return
+
+        item0 = self.table.item(r, 0)
+        if item0 is None:
+            self.show_error("Internal error: missing request id.")
+            return
+
+        req_id = item0.data(Qt.UserRole)
+        if req_id is None:
+            self.show_error("Internal error: invalid request id.")
+            return
+
+        req = {
+            "type": "RIDE.ACCEPT_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": {"request_id": req_id},
+        }
+
+        try:
+            resp = self.session.request(req)
+        except Exception as e:
+            self.show_error(f"Network error: {e}")
+            return
+
+        rtype = resp.get("type")
+        payload = resp.get("payload", {})
+
+        if rtype == "RIDE.ACCEPT_RES":
+            self.show_ok(f"Accepted {req_id}.")
+            self.table.clearSelection()
+            self.refresh()
+            self.rideAccepted.emit(req_id, payload)
+        elif rtype == "ERROR":
+            code = payload.get("code")
+            msg = payload.get("message", "Failed to accept request.")
+
+            if code == "REQUEST.CLOSED":
+                msg = "This request is no longer available (cancelled, matched, or expired)"
+            
+            self.show_error(msg)
+            self.table.clearSelection()
+            self.refresh()
+        else:
+            self.show_error(f"Unexpected response: {rtype}")
+    
+    def handle_request_closed(self, payload):
+        QMessageBox.information(self, "Request Closed", "A ride request you are eligible for has been closed (cancelled by passenger or expired).")
+        self.refresh()
+    
+    def add_broadcast(self, payload):
+        self.refresh()
+    
+    def _min_passenger_rating(self):
+        idx = self.cb_min_passenger_rating.currentIndex()
+        val = self.cb_min_passenger_rating.itemData(idx)
+        if isinstance(val, (int, float)):
+            return float(val)
+        return None
+# =============================================================================
+
+
+
+# =============================================================================
+# from accepting ride until completion
+class CurrentRidePage(QWidget):
+    def __init__(self, session, parent=None):
+        super().__init__(parent)
+        self.session = session
+
+        v = QVBoxLayout(self)
+
+        self.info_label = QLabel("No active ride")
+        v.addWidget(self.info_label)
+
+        self.chat_box = QTextEdit()
+        self.chat_box.setReadOnly(True)
+        self.chat_box.setStyleSheet("""
+            QTextEdit {
+                background-color: #020617;
+                border-radius: 18px;
+                border: 1px solid rgba(148,163,184,0.35);
+                padding: 10px;
+            }
+        """)
+
+        v.addWidget(self.chat_box, 1)
+
+        self.chat_input = QLineEdit()
+        self.chat_input.setPlaceholderText("Type a message...")
+        self.chat_input.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(15,23,42,0.9);
+                border-radius: 999px;
+                padding: 8px 12px;
+                border: 1px solid rgba(148,163,184,0.35);
+            }
+        """)
+        v.addWidget(self.chat_input)
+
+        h = QHBoxLayout()
+        self.send_btn = QPushButton("Send")
+        self.complete_btn = QPushButton("Complete Ride")
+        h.addWidget(self.send_btn)
+        h.addWidget(self.complete_btn)
+        v.addLayout(h)
+
+        # hide complete button by default (passenger)
+        self.complete_btn.hide()
+
+        
+        self.send_btn.clicked.connect(self.on_send_clicked)
+    
+    def append_bubble(self, text: str, outgoing: bool, timestamp=None):
+        """
+        Render a single message as a left/right chat bubble
+        with rounded corners and a small timestamp.
+        """
+        if not text:
+            return
+
+        safe = html.escape(text).replace("\n", "<br/>")
+
+        if outgoing:
+            align = "right"
+            bg = "#4f46e5"   # indigo
+            fg = "#f9fafb"
+            label = "You"
+        else:
+            align = "left"
+            bg = "#111827"   # dark gray
+            fg = "#e5e7eb"
+            label = "Them"
+
+        if timestamp is None:
+            timestamp = QDateTime.currentDateTime()
+        ts_str = timestamp.toString("HH:mm")
+
+        # table trick so Qt actually honors left/right alignment
+        bubble_html = f"""
+        <table width="100%" cellspacing="0" cellpadding="0">
+          <tr>
+            <td align="{align}">
+              <span style="
+                  background-color:{bg};
+                  color:{fg};
+                  padding:8px 12px;
+                  border-radius:18px;
+                  font-size:10pt;
+                  display:inline-block;
+              ">
+                <span style="font-size:8pt; opacity:0.7;">{label}:</span>
+                {safe}
+                <span style="font-size:8pt; opacity:0.6; margin-left:8px;">
+                  {ts_str}
+                </span>
+              </span>
+            </td>
+          </tr>
+        </table>
+        """
+
+        cursor = self.chat_box.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.chat_box.setTextCursor(cursor)
+        self.chat_box.insertHtml(bubble_html)
+        self.chat_box.moveCursor(QTextCursor.End)
+        self.chat_box.ensureCursorVisible()
+
+
+
+    def on_send_clicked(self):
+        msg = self.chat_input.text().strip()
+        if not msg:
+            return
+        mw = self.window()
+        ok = False
+        if hasattr(mw, "send_chat_message"):
+            ok = mw.send_chat_message(msg)
+        
+            if ok:
+                self.append_bubble(msg, outgoing=True)
+                self.chat_input.clear()
+            else:
+                QMessageBox.warning(self, "Send Failed", "Failed to send message.")
+
+    def load_for_driver(self, match_payload):
+        """
+        Called when driver receives a MATCH notification
+        """
+        p = match_payload.get("passenger_info", {})
+        passenger_name = p.get("name", "Passenger")
+        driver_name = match_payload.get("driver_info", {}).get("name", "Driver")
+        self.info_label.setText(f"Passenger matched! Ride with passenger: {passenger_name}")
+        self.complete_btn.show()
+
+    def load_for_passenger(self, payload):
+        """
+        Called when passenger receives MATCH notification
+        """
+        d = payload.get("driver_info", {})
+        name = d.get("name", "Driver")
+        model = d.get("vehicle_model", "Unknown")
+        color = d.get("vehicle_color", "Unknown")
+        plate = d.get("vehicle_plate", "Unknown")
+
+        self.info_label.setText(
+            f"Driver matched!\nName: {name}\nCar: {model} ({color})\nPlate: {plate}"
+        )
+        self.complete_btn.hide()
+# =============================================================================
+
 
 
 # =============================================================================
@@ -286,7 +2183,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.current_ride_page)
         self.current_ride_page.complete_btn.clicked.connect(self.complete_ride)
 
-        self.btn_profile.clicked.connect(self.show_profile_page)
+        self.btn_profile.clicked.connect(lambda: self.stack.setCurrentWidget(self.profile_page))
         self.btn_sched.clicked.connect(lambda: self.stack.setCurrentWidget(self.schedule_page))
         self.btn_ride.clicked.connect(lambda: self.stack.setCurrentWidget(self.ride_page))
         self.btn_current.clicked.connect(lambda: self.stack.setCurrentWidget(self.current_ride_page))
@@ -318,64 +2215,27 @@ class MainWindow(QMainWindow):
         # Profile screen
         profile = ProfileScreen(self.session, user_preview)
         profile.driverModeChanged.connect(self.on_driver_mode_changed)
-        user_preview.setdefault("rating_avg", 0.0)
-        user_preview.setdefault("rating_count", 0)
-        profile.update_from_user_preview(user_preview)
+
         
         self.stack.removeWidget(self.profile_page)
         self.profile_page.deleteLater()
         self.profile_page = profile
         self.stack.insertWidget(0, self.profile_page)
 
+        
+        self.stack.removeWidget(self.schedule_page)
+        self.schedule_page.deleteLater()
+        self.schedule_page = ScheduleScreen(self.session)
+        self.stack.insertWidget(1, self.schedule_page)
+
+        
         is_driver = bool(user_preview.get("is_driver", False))
         self.on_driver_mode_changed(is_driver)
 
         self.root.setCurrentWidget(self.app_page)
         self.stack.setCurrentWidget(self.profile_page)
         self.btn_profile.setChecked(True)
-
         
-    def show_profile_page(self):
-        """
-        Whenever the user opens Profile, synchronously ask the server for the
-        latest profile (including updated rating) and immediately refresh the UI.
-        """
-        if self.session is not None:
-            req = {
-                "type": "PROFILE.GET_REQ",
-                "id": str(uuid.uuid4()),
-                "payload": {}  # current user
-            }
-            try:
-                # Use request() so we get the response right here
-                resp = self.session.request(req)
-                if resp.get("type") == "PROFILE.GET_RES":
-                    user = (resp.get("payload") or {}).get("user") or {}
-
-                    if self.user_preview is None:
-                        self.user_preview = {}
-
-                    # merge fresh data
-                    self.user_preview.update(user)
-
-                    # server returns 'rating' = rating_avg from users table
-                    rating = user.get("rating")
-                    if rating is not None:
-                        self.user_preview["rating_avg"] = rating
-
-                    # let ProfileScreen repaint itself
-                    if hasattr(self, "profile_page") and self.profile_page is not None:
-                        try:
-                            self.profile_page.update_from_user_preview(self.user_preview)
-                        except Exception as e:
-                            print("show_profile_page: failed to update profile screen:", e)
-
-            except Exception as e:
-                print("PROFILE.GET_REQ failed:", e)
-
-        # finally, show the profile page
-        self.stack.setCurrentWidget(self.profile_page)
-
 
 
     def on_driver_mode_changed(self, is_driver: bool):
@@ -570,17 +2430,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "chat_endpoint", None) is not None:
             self.chat_endpoint = None
 
-    def toggle_theme(self):
-        if getattr(self, "current_theme", "dark") == "dark":
-            self.current_theme = "light"
-            apply_theme("light")
-            self.btn_theme.setText("Dark mode")
-        else:
-            self.current_theme = "dark"
-            apply_theme("dark")
-            self.btn_theme.setText("Light mode")
-
-
+    
     def on_push_received(self, msg: dict):
         t = msg.get("type")
         payload = msg.get("payload", {})
@@ -632,63 +2482,39 @@ class MainWindow(QMainWindow):
 
         elif t == "DRIVER.BROADCAST":
             self.on_driver_broadcast(msg)
-        
+
         elif t == "PROFILE.UPDATED":
-            # Update the cached user preview
+            # DEBUG: see the push on BOTH sides
+            print("PROFILE.UPDATED push:", payload)
+
+            # 1) Update the cached preview of the *logged in user*
             if payload:
-                if "rating_avg" in payload:
-                    self.user_preview["rating_avg"] = payload["rating_avg"]
-                if "rating_count" in payload:
-                    self.user_preview["rating_count"] = payload["rating_count"]
+                self.user_preview["rating_avg"] = payload.get(
+                    "rating_avg",
+                    self.user_preview.get("rating_avg"),
+                )
+                self.user_preview["rating_count"] = payload.get(
+                    "rating_count",
+                    self.user_preview.get("rating_count"),
+                )
 
-            # If the profile screen is open, refresh it
-            if hasattr(self, "profile_page") and self.profile_page is not None:
-                try:
-                    self.profile_page.update_from_user_preview(self.user_preview)
-                except Exception as e:
-                    print("profile update failed:", e)
+            # 2) Refresh profile screen if it has been constructed
+            if isinstance(self.profile_page, ProfileScreen):
+                self.profile_page.update_from_user_preview(self.user_preview)
 
-        elif t == "RIDE.RATE_RES":
-            # after rating, ask server for fresh profile
-            self.session.send_json({
-                "type": "PROFILE.GET_REQ",
-                "id": str(uuid.uuid4()),
-                "payload": {}  # current user
-            })
+    
+    
         
-        elif t == "PROFILE.GET_RES":
-            # Response to PROFILE.GET_REQ: refresh local preview and profile screen
-            user = payload.get("user") or {}
-            if not user:
-                return
-
-            if self.user_preview is None:
-                self.user_preview = {}
-
-            # Update preview with whatever came from the server
-            self.user_preview.update(user)
-
-            # PROFILE.GET_RES returns `rating`, but ProfileScreen expects rating_avg
-            rating = user.get("rating")
-            if rating is not None:
-                self.user_preview["rating_avg"] = rating
-
-            if hasattr(self, "profile_page") and self.profile_page is not None:
-                try:
-                    self.profile_page.update_from_user_preview(self.user_preview)
-                except Exception as e:
-                    print("PROFILE.GET_RES: failed to update profile screen:", e)
-
     def on_ride_matched(self, msg: dict):
         payload = msg.get("payload", {})
         if isinstance(self.ride_page, RideRequestPage):
             self.ride_page.handle_matched(payload)
-
+    
     def on_request_closed(self, msg: dict):
         """Called when server notifies that a ride was closed"""
         payload = msg.get("payload", {})
         reason = payload.get("reason")
-        req_id = payload.get("request_id")
+
         if isinstance(self.ride_page, DriverRidePage):
             self.ride_page.handle_request_closed(payload)
 
@@ -696,10 +2522,8 @@ class MainWindow(QMainWindow):
         # reset the passenger's request form state
             self.ride_page.set_idle_state()
         
-        if reason == "completed" and req_id:
-            # passenger rates driver
-            dlg = RateRideDialog(req_id, self.session, self)
-            dlg.exec()
+        if reason == "completed":
+            self.show_rating_dialog()
 
         try:
             self.return_to_idle_state()
@@ -712,10 +2536,57 @@ class MainWindow(QMainWindow):
                 self.current_ride_page.info_label.setText("No active ride")
         except AttributeError:
             pass
-
+    
     def on_driver_broadcast(self, msg: dict):
         if isinstance(self.ride_page, DriverRidePage):
             self.ride_page.add_broadcast(msg.get("payload", {}))
+    
+    def show_rating_dialog(self):
+        """
+        Show star rating dialog for the current ride (if any)
+        and send RIDE.RATE_REQ to the server.
+        """
+        req_id = self.active_request_id
+        if not req_id:
+            return
+
+        role = "driver" if self.user_preview.get("is_driver") else "passenger"
+        if role == "driver":
+            title = "Rate your passenger"
+            subtitle = "Please rate your passenger before leaving this ride."
+        else:
+            title = "Rate your driver"
+            subtitle = "Please rate your driver before leaving this ride."
+
+        dlg = RatingDialog(self, title=title, subtitle=subtitle)
+        rating = dlg.get_rating()
+        if rating is None:
+            # user skipped
+            return
+
+        try:
+            res = self.session.request({
+                "type": "RIDE.RATE_REQ",
+                "payload": {
+                    "request_id": req_id,
+                    "rating": int(rating),
+                },
+            })
+        except Exception as e:
+            QMessageBox.warning(self, "Rating failed", f"Network error while sending rating: {e}")
+            return
+
+        rtype = res.get("type")
+        payload = res.get("payload", {})
+
+        if rtype == "RIDE.RATE_RES":
+            QMessageBox.information(self, "Thank you", "Your rating has been recorded.")
+        elif rtype == "ERROR":
+            msg = payload.get("message", "Failed to save rating.")
+            QMessageBox.warning(self, "Rating failed", f"Server error: {msg}")
+        else:
+            QMessageBox.warning(self, "Rating failed", f"Unexpected response: {rtype}")
+ 
 
     def complete_ride(self):
         # DRIVER ONLY
@@ -731,13 +2602,7 @@ class MainWindow(QMainWindow):
             return
         
         if res["type"] == "RIDE.COMPLETE_RES":
-            QMessageBox.information(self, "Ride Completed", "Ride successfully completed.")
-
-            # Driver rates passenger
-            if self.active_request_id:
-                dlg = RateRideDialog(self.active_request_id, self.session, self)
-                dlg.exec_()
-
+            self.show_rating_dialog()
             self.return_to_idle_state()
         
         elif res["type"] == "ERROR":
@@ -747,20 +2612,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ride Completed", f"Unexpected response: {res.get('type')}")
             
     
-    def on_server_message(self, msg: dict):
-        t = msg.get("type")
-        p = msg.get("payload") or {}
-
-        if t == "PROFILE.GET_RES":
-            user = p.get("user") or {}
-            self.current_user_profile = user
-            self.profile_page.update_from_profile(user)
-
-    
-    
-
-
-
     def return_to_idle_state(self):
         # driver or passenger
 
@@ -832,11 +2683,6 @@ class MainWindow(QMainWindow):
             print("send_chat_message: ERROR while sending:", e)
             traceback.print_exc()
             return False
-
-
-
-
-
 def main():
     app = QApplication(sys.argv)
     apply_bento_theme(app)
