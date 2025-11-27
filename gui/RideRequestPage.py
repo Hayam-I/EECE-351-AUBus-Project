@@ -206,15 +206,10 @@ class RideRequestPage(QWidget):
             "lat":  float(self.selected_lat),
             "lon": float(self.selected_lon),
         }
-        
+
         if min_driver_rating > 0.0:
             payload["min_driver_rating"] = min_driver_rating
 
-        self.session.send_json({
-            "type": "RIDE.REQUEST_REQ",
-            "id": str(uuid.uuid4()),
-            "payload": payload,
-        })
 
 
         req = {"type": "RIDE.REQUEST_REQ", "id": str(uuid.uuid4()), "payload": payload}
