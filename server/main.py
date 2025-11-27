@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 AUBus – Server
 -------------------------------------------
@@ -58,6 +57,7 @@ DB_PATH = "database.db"
 a single request once one driver accepts it, but theres nothing that prevents that same driver from accepting another request later (or concurrently) because we dont keep any “driver is busy” state in memory or in the DB.
 """
 BUSY_DRIVERS: set[int] = set()
+ONLINE_USERS: dict[int, socket.socket] = {}
 ONLINE_DRIVERS: dict[int, socket.socket] = {}
 ACTIVE_REQUEST_DRIVERS: dict[str, set[int]] = defaultdict(set)
 _REQUEST_LAST_TOUCH: dict[str, float] =  {}
@@ -205,9 +205,6 @@ def _minutes_from_iso(iso_s: str) -> tuple[int, int]:
     minutes = dt.hour * 60 + dt.minute
     return sun0, minutes
 
-def _now_iso() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
 #going from req_123 -> 123
 def _reqid_to_int(req_id: str) -> int | None:
     if isinstance(req_id, str) and req_id.startswith("req_"):
@@ -219,7 +216,7 @@ def _reqid_to_int(req_id: str) -> int | None:
 
 def _normalize_peer_endpoint(conn_state: dict, announced_port: int | None) -> tuple[str | None, int | None]:
     """
-     Choose the best (ip, port) we can give to the passenger for P2P bootstrap.
+     Choose the best (ip, port) we can give to the passenger for P2P connection.
     - IP is always the server-observed remote IP from this TCP connection.
     - Port is driver's explicitly announced P2P port if valid, else None.
     """
@@ -405,7 +402,8 @@ def profile_get(current_user_id: int, payload: dict, mid):
             "name": row[1],
             "area": row[6],
             "is_driver": bool(row[5]),
-            "rating": float(row[8]) if row[8] is not None else 0.0,
+            "rating_avg": row[8],
+            "rating_count": row[9],
         }
         return {"type": "PROFILE.GET_RES", "id": mid, "payload": {"user": user}}
     except Exception:
@@ -485,7 +483,6 @@ def schedule_set(conn_state, payload, mid):
             "id": mid,
             "payload": {"code": "SERVER_ERROR", "message": "Failed to set schedule"},
         }
-
 
 def schedule_get(conn_state, payload, mid):
     uid, err = require_logged_in(conn_state, mid)
@@ -672,7 +669,7 @@ def _broadcast_driver_candidates(request_id: str, passenger_preview: dict, candi
 
     return sent
 
-
+#completed ride
 def _notify_request_closed(request_id: str, winner_uid: int, remaining: set[int]):
     targets = []
     with STATE_LOCK:
@@ -702,18 +699,14 @@ def _driver_has_active_match(driver_id: int) -> bool:
     except Exception:
         logging.exception("_driver_has_active_match failed")
         return True
-        
 
 def _ride_accept(conn_state, payload, mid):
     driver_id, err = require_logged_in(conn_state, mid)
-
     if err:
         return err
     _ok, derr = require_driver(conn_state, mid)
     if derr:
         return derr
-    
-    passenger_preview = None
 
     req_s = (payload or {}).get("request_id")
     req_id_int = _reqid_to_int(req_s)
@@ -798,17 +791,6 @@ def _ride_accept(conn_state, payload, mid):
             conn.close()
             return {"type":"ERROR","id":mid,"payload":{
                 "code":"REQUEST_CLOSED","message":"request not open"}}
-        
-        # fetch passenger preview (for the driver UI/chat)
-        cur.execute(
-            "SELECT user_id, name, username, password, email, is_driver, area, "
-            "rating_sum, rating_avg, rating_count "
-            "FROM users WHERE user_id=?",
-            (passenger_id,),
-        )
-        prow = cur.fetchone()
-        if prow:
-            passenger_preview = _user_preview_from_row(prow)
 
         conn.commit()
         conn.close()
@@ -862,17 +844,9 @@ def _ride_accept(conn_state, payload, mid):
         _REQUEST_LAST_TOUCH.pop(f"req_{req_id_int}", None)
         #REQUEST_PASSENGERS.pop(f"req_{req_id_int}", None)
 
-    res_payload = {
-        "request_id": f"req_{req_id_int}",
-    }
-    if passenger_preview:
-        res_payload["passenger_info"] = passenger_preview
-
-    return {
-        "type": "RIDE.ACCEPT_RES",
-        "id": mid,
-        "payload": res_payload,
-    }
+    return {"type":"RIDE.ACCEPT_RES", "id":mid, "payload":{
+        "request_id": f"req_{req_id_int}"
+    }}
 
 def _mark_driver_sees_request(request_id: str, driver_id: int):
     """Record that this driver is eligible to accept this request."""
@@ -1112,6 +1086,132 @@ def _ride_complete(conn_state, payload, mid):
     _free_driver(driver_id)
     return {"type":"RIDE.COMPLETE_RES", "id":mid, "payload":{}}
 
+def _ride_rate(conn_state, payload, mid):
+    """Handle RIDE.RATE_REQ: one side rates the other after a completed ride."""
+    rater_id, err = require_logged_in(conn_state, mid)
+    if err:
+        return err
+
+    p = payload or {}
+    req_s = p.get("request_id")
+    rating = p.get("rating")
+
+    # validate request_id
+    req_id_int = _reqid_to_int(req_s)
+    if not isinstance(req_id_int, int):
+        return {"type": "ERROR", "id": mid,
+                "payload": {"code": "BAD_REQUEST", "message": "invalid request_id"}}
+
+    # validate rating
+    if not isinstance(rating, int) or not (1 <= rating <= 5):
+        return {"type": "ERROR", "id": mid,
+                "payload": {"code": "BAD_REQUEST", "message": "rating must be 1–5"}}
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        # find match
+        cur.execute(
+            "SELECT match_id, user_id, driver_id, status FROM matches WHERE request_id=?",
+            (req_id_int,)
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return {"type": "ERROR", "id": mid,
+                    "payload": {"code": "NOT_FOUND",
+                                "message": "match not found"}}
+
+        match_id, passenger_id, driver_id, status = row
+
+        # determine who is being rated
+        if rater_id == driver_id:
+            ratee_id = passenger_id
+        elif rater_id == passenger_id:
+            ratee_id = driver_id
+        else:
+            conn.close()
+            return {"type": "ERROR", "id": mid,
+                    "payload": {"code": "FORBIDDEN",
+                                "message": "you are not part of this ride"}}
+
+        # insert rating (1 per match per ratee)
+        try:
+            cur.execute(
+                "INSERT INTO ratings(match_id, user1_id, user2_id, stars) VALUES (?,?,?,?)",
+                (match_id, rater_id, ratee_id, rating)
+            )
+        except sqlite3.IntegrityError:
+            conn.close()
+            return {"type": "ERROR", "id": mid,
+                    "payload": {"code": "DUPLICATE",
+                                "message": "rating already submitted"}}
+
+        # update user aggregates
+        cur.execute("SELECT rating_sum, rating_count FROM users WHERE user_id=?",
+                    (ratee_id,))
+        s, c = cur.fetchone()
+        if s is None: s = 0
+        if c is None: c = 0
+
+        new_sum = s + rating
+        new_count = c + 1
+        new_avg = float(new_sum) / new_count
+
+        cur.execute(
+            "UPDATE users SET rating_sum=?, rating_count=?, rating_avg=? WHERE user_id=?",
+            (new_sum, new_count, new_avg, ratee_id)
+        )
+        cur.execute(
+            "SELECT name, email, area, is_driver, rating_avg, rating_count "
+            "FROM users WHERE user_id=?",
+            (ratee_id,)
+        )
+        updated_row = cur.fetchone()
+
+        conn.commit()
+        ratee_sock = None
+
+        with STATE_LOCK:
+            ratee_sock = ONLINE_USERS.get(ratee_id)
+
+        if ratee_sock:
+            _send_json_safe(ratee_sock, {
+                "type": "PROFILE.UPDATED",
+                "id": _uuid(),
+                "payload": {
+                    "rating_avg": new_avg,
+                    "rating_count": new_count,
+                }
+            })
+
+
+        conn.close()
+
+        updated_user = {
+            "name": updated_row[0],
+            "email": updated_row[1],
+            "area": updated_row[2],
+            "is_driver": bool(updated_row[3]),
+            "rating_avg": updated_row[4],
+            "rating_count": updated_row[5],
+        }
+
+        return {
+            "type": "RIDE.RATE_RES",
+            "id": mid,
+            "payload": {"request_id": req_s, "updated_user":updated_user}
+        }
+
+    except Exception:
+        logging.exception("RIDE.RATE_REQ failed")
+        try: conn.close()
+        except: pass
+        return {"type": "ERROR", "id": mid,
+                "payload": {"code": "SERVER_ERROR",
+                            "message": "failed to record rating"}}
+
 def _cancel_active_matches_for_driver(driver_id: int):
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -1151,19 +1251,6 @@ def _passenger_has_active_request(user_id: int) -> bool:
 
 
 
-# ---------------------------------------------------------
-# Dispatcher (takes per-connection state) (NOT UP TO DATE!!)
-# Validates 'type' and 'id'
-    # mtype switch:
-    # - "PING" → PONG
-    # - "AUTH.REGISTER_REQ" → register_user(...)
-    # - "AUTH.LOGIN_REQ"    → login_user(...) and bind conn_state["user_id"]
-    # - "AUTH.LOGOUT_REQ"   → clears conn_state["user_id"]
-    # - "PROFILE.SET_REQ"   → requires login
-    # - "PROFILE.GET_REQ"   → requires login (or explicit user_id payload) 
-    # otherwise → ERROR: UNKNOWN_TYPE
-# ---------------------------------------------------------
-
 def handle_message(msg: dict, conn_state: dict):
     if "type" not in msg or "id" not in msg:
         return {"type": "ERROR", "id": msg.get("id"),
@@ -1194,17 +1281,16 @@ def handle_message(msg: dict, conn_state: dict):
             conn_state["user_id"] = uid  # bind this socket to the user
             user_preview = res["user"]
 
-            if user_preview.get("is_driver"):
-                with STATE_LOCK:
-                
+            with STATE_LOCK:
+                ONLINE_USERS[uid] = conn_state.get("sock")
+                if user_preview.get("is_driver"):
                     ONLINE_DRIVERS[uid] = conn_state.get("sock")
-
                     ip = conn_state["peer"][0] if conn_state.get("peer") else None
 
-
+                       
+            
                     
-            else:
-                with STATE_LOCK:
+                else:
                     ONLINE_DRIVERS.pop(uid, None)
                     DRIVER_PEERS.pop(uid, None)
 
@@ -1220,6 +1306,8 @@ def handle_message(msg: dict, conn_state: dict):
             _free_driver(uid)
 
         with STATE_LOCK:
+            if uid in ONLINE_USERS:
+                ONLINE_USERS.pop(uid, None)
             if uid in ONLINE_DRIVERS:
                 ONLINE_DRIVERS.pop(uid, None)
             if uid in DRIVER_PEERS:
@@ -1279,6 +1367,17 @@ def handle_message(msg: dict, conn_state: dict):
         else:
             min_driver_rating = 0.0
         
+
+        # Optional: minimum driver rating (1–5) requested by passenger
+        min_driver_rating = p.get("min_driver_rating")
+        if isinstance(min_driver_rating, (int, float)):
+            min_driver_rating = float(min_driver_rating)
+            # clamp to sensible range or disable if nonsense
+            if not (0.0 <= min_driver_rating <= 5.0):
+                min_driver_rating = None
+        else:
+            min_driver_rating = None
+
 
         if not isinstance(area, str) or not area.strip():
             return {
@@ -1342,10 +1441,20 @@ def handle_message(msg: dict, conn_state: dict):
             # 1) create request row with lat/lon
             cur.execute(
                 """
-                INSERT INTO ride_req (user_id, area, direction, departure_time, lat, lon, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
+                INSERT INTO ride_req (
+                    user_id,
+                    area,
+                    direction,
+                    departure_time,
+                    lat,
+                    lon,
+                    min_driver_rating,
+                    status,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
                 """,
-                (uid, area, direction, time_iso, lat, lon),
+                (uid, area, direction, time_iso, lat, lon, min_driver_rating),
             )
             req_id_int = cur.lastrowid
             request_id = f"req_{req_id_int}"
@@ -1355,7 +1464,12 @@ def handle_message(msg: dict, conn_state: dict):
             #    area is *ignored* for matching now.
             cur.execute(
                 """
-                SELECT s.user_id, s.depart_time, s.lat, s.lon
+                SELECT s.user_id,
+                       s.depart_time,
+                       s.lat,
+                       s.lon,
+                       u.rating_avg,
+                       u.rating_count
                 FROM schedules s
                 JOIN users u ON u.user_id = s.user_id
                 WHERE s.weekday=? AND s.direction=? AND u.is_driver=1
@@ -1363,6 +1477,7 @@ def handle_message(msg: dict, conn_state: dict):
                 (weekday_sun0, direction),
             )
             rows = cur.fetchall()
+
             conn.commit()
             conn.close()
 
@@ -1370,7 +1485,13 @@ def handle_message(msg: dict, conn_state: dict):
             RADIUS_KM = 1.0
 
             candidate_ids = []
-            for driver_id, depart_hhmm, dlat, dlon in rows:
+            for driver_id, depart_hhmm, dlat, dlon, rating_avg, rating_count in rows:
+                #rating 
+                if min_driver_rating is not None:
+                    driver_rating = float(rating_avg) if rating_avg is not None else 0.0
+                    if driver_rating < min_driver_rating:
+                        continue
+
                 # Require driver to have a pin as well
                 try:
                     dlat = float(dlat)
@@ -1507,7 +1628,7 @@ def handle_message(msg: dict, conn_state: dict):
                     "payload": {"items": []},
                 }
 
-            # All open ride requests WITH lat/lon
+            # All open ride requests WITH lat/lon + rating
             cur.execute(
                 """
                 SELECT r.request_id,
@@ -1524,6 +1645,7 @@ def handle_message(msg: dict, conn_state: dict):
                 """
             )
             req_rows = cur.fetchall()
+
             conn.close()
 
             CUTOFF_MIN = 30
@@ -1839,7 +1961,9 @@ def handle_message(msg: dict, conn_state: dict):
     if mtype == "RIDE.COMPLETE_REQ":
         return _ride_complete(conn_state, payload, mid)
 
-
+    if mtype == "RIDE.RATE_REQ":
+        return _ride_rate(conn_state, payload, mid)
+    
     # Unknown
     return {"type": "ERROR", "id": mid, "payload": {"code": "UNKNOWN_TYPE", "message": f"Unsupported type: {mtype}"}}
 
@@ -1874,6 +1998,8 @@ def client_thread(conn: socket.socket, addr):
         try:
             uid = conn_state.get("user_id")
             with STATE_LOCK:
+                if uid in ONLINE_USERS and ONLINE_USERS.get(uid) is conn:
+                    ONLINE_USERS.pop(uid, None)
                 if uid in ONLINE_DRIVERS and ONLINE_DRIVERS.get(uid) is conn:
                     ONLINE_DRIVERS.pop(uid, None)
                 DRIVER_PEERS.pop(uid, None)

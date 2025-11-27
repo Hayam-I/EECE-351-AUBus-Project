@@ -50,8 +50,165 @@ def set_visible(widget, visible: bool):
 
 
 # =============================================================================
-# Main window: wires everything together
+# rating
+class StarRatingWidget(QWidget):
+    ratingChanged = pyqtSignal(int)
+
+    def __init__(self, parent=None, max_stars=5):
+        super().__init__(parent)
+        self.max_stars = max_stars
+        self._rating = 0
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self._pix_empty = self._make_star_pixmap(28, QColor("#4b5563"))   # grey
+        self._pix_filled = self._make_star_pixmap(28, QColor("#facc15"))  # yellow
+
+        self._buttons: list[QPushButton] = []
+        for i in range(max_stars):
+            btn = QPushButton()
+            btn.setCheckable(True)
+            btn.setFlat(True)
+            btn.setIcon(QIcon(self._pix_empty))
+            btn.setIconSize(self._pix_empty.size())
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedSize(36, 36)
+            btn.setStyleSheet("""
+                QPushButton {
+                    border: none;
+                    background-color: transparent;
+                    font-size: 22px;
+                    color: #4b5563;
+                }
+            """)
+            btn.clicked.connect(lambda _=False, idx=i: self.set_rating(idx + 1))
+            self._buttons.append(btn)
+            layout.addWidget(btn)
+
+        layout.addStretch(1)
+    
+    def _make_star_pixmap(self, size: int, color: QColor) -> QPixmap:
+        """Draw a 5-point star into a transparent pixmap."""
+        import math
+
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(color)
+        painter.setPen(Qt.NoPen)
+
+        cx = cy = size / 2.0
+        outer_r = size * 0.45
+        inner_r = size * 0.20
+
+        points = []
+        # 10 points: outer, inner, outer, inner...
+        for i in range(10):
+            angle = math.pi / 2 + i * math.pi / 5  # start from top
+            r = outer_r if i % 2 == 0 else inner_r
+            x = cx + r * math.cos(angle)
+            y = cy - r * math.sin(angle)
+            points.append(QPointF(x, y))
+
+        poly = QPolygonF(points)
+        painter.drawPolygon(poly)
+        painter.end()
+        return pm
+
+    def set_rating(self, value: int):
+        value = max(0, min(self.max_stars, int(value)))
+        self._rating = value
+        for i, btn in enumerate(self._buttons, start=1):
+            filled = i <= value
+            btn.setChecked(filled)
+            btn.setIcon(QIcon(self._pix_filled if filled else self._pix_empty))
+        self.ratingChanged.emit(self._rating)
+
+    def rating(self) -> int:
+        return self._rating
+class RatingDialog(QDialog):
+    def __init__(self, parent=None, title="Rate your ride", subtitle="How was your ride experience?"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+
+        self.setMinimumWidth(480)
+        self.setMaximumWidth(480)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #020617;
+            }
+            QLabel {
+                color: #e5e7eb;
+                background-color: transparent;
+            }
+            QPushButton {
+                background-color: #111827;
+                color: #e5e7eb;
+                border-radius: 10px;
+                padding: 6px 14px;
+                border: 1px solid #1f2937;
+            }
+            QPushButton:hover {
+                background-color: #1f2937;
+                border-color: #4b5563;
+            }
+            QPushButton:pressed {
+                background-color: #4f46e5;
+                border-color: #4f46e5;
+                color: #f9fafb;
+            }
+        """)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 16, 20, 16)
+        v.setSpacing(10)
+
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet("font-size: 14pt; font-weight: 600;")
+        v.addWidget(lbl_title)
+
+        lbl_sub = QLabel(subtitle)
+        lbl_sub.setWordWrap(True)
+        lbl_sub.setStyleSheet("color: #9ca3af;")
+        v.addWidget(lbl_sub)
+
+        self.star_widget = StarRatingWidget(self)
+        v.addWidget(self.star_widget)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        self.btn_skip = QPushButton("Skip")
+        self.btn_ok = QPushButton("Submit")
+
+        self.btn_skip.clicked.connect(self.reject)
+        self.btn_ok.clicked.connect(self._on_submit)
+
+        btn_row.addWidget(self.btn_skip)
+        btn_row.addWidget(self.btn_ok)
+        v.addLayout(btn_row)
+
+    def _on_submit(self):
+        if self.star_widget.rating() <= 0:
+            QMessageBox.information(self, "Rating", "Select at least one star or press Skip.")
+            return
+        self.accept()
+
+    def get_rating(self):
+        """Returns 1–5 or None if skipped."""
+        result = self.exec_()
+        if result == QDialog.Accepted:
+            return self.star_widget.rating()
+        return None
 # =============================================================================
+
+
 class MainWindow(QMainWindow):
     incoming_p2p_connection = pyqtSignal(object, tuple)
     def __init__(self):
@@ -67,7 +224,6 @@ class MainWindow(QMainWindow):
         self.p2p_sock = None
         self.p2p_thread = None
         self.chat_endpoint = None
-        self.other_party_name = None
         self.incoming_p2p_connection.connect(self._on_incoming_p2p_connection)
         
 
@@ -100,7 +256,6 @@ class MainWindow(QMainWindow):
         self.btn_ride    = QPushButton("Ride")
         self.btn_current = QPushButton("Current Ride")
         self.btn_logout = QPushButton("Logout")
-        self.btn_theme   = QPushButton("Light mode")
         
         for b in (self.btn_profile, self.btn_sched, self.btn_ride, self.btn_current):
             b.setCheckable(True)
@@ -108,12 +263,12 @@ class MainWindow(QMainWindow):
             left_l.addWidget(b)
         left_l.addStretch(1)
 
-        left_l.addWidget(self.btn_theme)
+        
+
         left_l.addWidget(self.btn_logout)
         self.btn_logout.clicked.connect(self.on_logout)
 
-        self.current_theme = "dark"
-        self.btn_theme.clicked.connect(self.toggle_theme)
+        
 
         self.stack = QStackedWidget()
 
@@ -136,7 +291,7 @@ class MainWindow(QMainWindow):
         self.btn_ride.clicked.connect(lambda: self.stack.setCurrentWidget(self.ride_page))
         self.btn_current.clicked.connect(lambda: self.stack.setCurrentWidget(self.current_ride_page))
 
-        set_visible(self.btn_current, False)
+        self.btn_current.setEnabled(False)
         self.btn_profile.setChecked(True)
         self.stack.setCurrentWidget(self.profile_page)
         
@@ -153,16 +308,10 @@ class MainWindow(QMainWindow):
         # Schedule initially disabled until we know driver mode
         self.set_schedule_enabled(False)
 
-    def set_theme(self, theme: str):
-        self.theme = theme
-        if theme == "dark":
-            QApplication.instance().setStyleSheet(DARK_STYLESHEET)
-        else:
-            QApplication.instance().setStyleSheet(LIGHT_STYLESHEET)
-
-
     def set_schedule_enabled(self, on: bool):
-        return #since passenger has to know
+        self.btn_sched.setEnabled(bool(on))
+        if hasattr(self, "schedule_page"):
+            self.schedule_page.setEnabled(bool(on))
 
     def after_login(self, user_preview: dict):
         self.user_preview = user_preview
@@ -230,25 +379,16 @@ class MainWindow(QMainWindow):
 
 
     def on_driver_mode_changed(self, is_driver: bool):
+        # enable/disable Schedule tab
+        self.set_schedule_enabled(is_driver)
+
         # P2P listener follows driver mode
         if is_driver:
             self.start_p2p_listener()
         else:
             self.stop_p2p_listener()
 
-        # ----- swap schedule page (driver vs passenger) -----
-        if hasattr(self, "schedule_page"):
-            self.stack.removeWidget(self.schedule_page)
-            self.schedule_page.deleteLater()
-
-        if is_driver:
-            self.schedule_page = ScheduleScreen(self.session)
-        else:
-            self.schedule_page = ScheduleInfoScreen()
-
-        self.stack.addWidget(self.schedule_page)
-
-        # ----- swap ride page (driver/passenger views) -----
+        # swap ride page (index 2) between driver/passenger views
         if hasattr(self, "ride_page"):
             self.stack.removeWidget(self.ride_page)
             self.ride_page.deleteLater()
@@ -260,7 +400,7 @@ class MainWindow(QMainWindow):
             self.ride_page = RideRequestPage(self.session)
 
         self.stack.addWidget(self.ride_page)
-
+        
 
     def closeEvent(self, event):
         """on window close, logout cleanly and close the session"""
@@ -305,7 +445,7 @@ class MainWindow(QMainWindow):
         self.btn_profile.setChecked(False)
         self.btn_sched.setChecked(False)
         self.btn_ride.setChecked(False)
-        set_visible(self.btn_current, False)
+        self.btn_current.setEnabled(False)
         self.stack.setCurrentWidget(self.profile_page)
 
     def _on_incoming_p2p_connection(self, conn, addr):
@@ -408,12 +548,13 @@ class MainWindow(QMainWindow):
         self.p2p_sock = None
         self.p2p_thread = None
 
-        if self.chat_endpoint is not None:
+        ep = getattr(self, "chat_endpoint", None)
+        self.chat_endpoint = None  # remove reference first
+        if ep:
             try:
-                self.chat_endpoint.close()
-            except Exception:
+                ep.close()
+            except:
                 pass
-            self.chat_endpoint = None
 
 
     def on_p2p_message(self, text: str):
@@ -447,8 +588,8 @@ class MainWindow(QMainWindow):
         if t == "RIDE.MATCHED":
             #debug message
             print("MainWindow: RIDE.MATCHED received, payload =", payload)
-            set_visible(self.btn_ride, False)
-            set_visible(self.btn_current, True)
+            self.btn_ride.setEnabled(False)
+            self.btn_current.setEnabled(True)
 
             self.btn_current.setChecked(True)
             self.stack.setCurrentWidget(self.current_ride_page)
@@ -465,8 +606,6 @@ class MainWindow(QMainWindow):
                 self.on_ride_matched(msg)
                 driver_ip = payload.get("driver_ip")
                 driver_port = payload.get("driver_port")
-                d = payload.get("driver_info", {})
-                self.other_party_name = d.get("name", "Them")
 
                 if driver_ip and driver_port:
                     try:
@@ -482,17 +621,15 @@ class MainWindow(QMainWindow):
                         self.chat_endpoint.messageReceived.connect(self.on_p2p_message)
                         self.chat_endpoint.disconnected.connect(self.on_p2p_disconnected)
 
-                        #self.current_ride_page.chat_box.append(f"<i>Connected to driver for chat</i>")
-
                 else:
                     if self.current_ride_page is not None:
-                        self.current_ride_page.append_bubble(f"<i>Driver did not provide chat info</i>", outgoing = False)
-        
-        
-        
+                        self.current_ride_page.append_bubble(
+                            f"<i>Driver did not provide chat info</i>", outgoing=False
+                        )
+
         elif t == "REQUEST.CLOSED":
             self.on_request_closed(msg)
-        
+
         elif t == "DRIVER.BROADCAST":
             self.on_driver_broadcast(msg)
         
@@ -565,8 +702,9 @@ class MainWindow(QMainWindow):
             dlg.exec()
 
         try:
-            set_visible(self.btn_current, False)
-            set_visible(self.btn_ride, True)
+            self.return_to_idle_state()
+            self.btn_current.setEnabled(False)
+            self.btn_ride.setEnabled(True)
             self.btn_ride.setChecked(True)
             self.stack.setCurrentWidget(self.ride_page)
             if hasattr(self, "current_ride_page"):
@@ -581,8 +719,17 @@ class MainWindow(QMainWindow):
 
     def complete_ride(self):
         # DRIVER ONLY
+        if not self.active_request_id:
+            QMessageBox.warning(self, "No active ride", "No active ride to rate")
+            return
+        
         payload = {"request_id": self.active_request_id}   # store this on match
-        res = self.session.request({"type": "RIDE.COMPLETE_REQ", "payload": payload})
+        try:
+            res = self.session.request({"type": "RIDE.COMPLETE_REQ", "payload": payload})
+        except Exception as e:
+            QMessageBox.warning(self, "Ride Completed", f"Network: {e}")
+            return
+        
         if res["type"] == "RIDE.COMPLETE_RES":
             QMessageBox.information(self, "Ride Completed", "Ride successfully completed.")
 
@@ -592,6 +739,13 @@ class MainWindow(QMainWindow):
                 dlg.exec_()
 
             self.return_to_idle_state()
+        
+        elif res["type"] == "ERROR":
+            p = res.get("payload", {})
+            QMessageBox.warning(self, "Ride Completed", p.get("message", "Failed to complete ride."))
+        else:
+            QMessageBox.warning(self, "Ride Completed", f"Unexpected response: {res.get('type')}")
+            
     
     def on_server_message(self, msg: dict):
         t = msg.get("type")
@@ -611,10 +765,10 @@ class MainWindow(QMainWindow):
         # driver or passenger
 
         # Disable current ride
-        set_visible(self.btn_current, False)
+        self.btn_current.setEnabled(False)
 
         # Enable ride
-        set_visible(self.btn_ride, True)
+        self.btn_ride.setEnabled(True)
         self.btn_ride.setChecked(True)
 
 
@@ -626,12 +780,13 @@ class MainWindow(QMainWindow):
         self.current_ride_page.chat_box.clear()
         self.current_ride_page.info_label.setText("No active ride")
 
-        if self.chat_endpoint is not None:
+        ep = getattr(self, "chat_endpoint", None)
+        self.chat_endpoint = None  # remove reference first
+        if ep:
             try:
-                self.chat_endpoint.close()
-            except Exception:
+                ep.close()
+            except:
                 pass
-            self.chat_endpoint = None
 
 
     def on_driver_ride_accepted(self, request_id: str, payload: dict):
@@ -640,8 +795,8 @@ class MainWindow(QMainWindow):
         We immediately go into 'current ride' state for the driver.
         """
         # Disable ride tab, enable Current Ride tab
-        set_visible(self.btn_ride, False)
-        set_visible(self.btn_current, True)
+        self.btn_ride.setEnabled(False)
+        self.btn_current.setEnabled(True)
 
         # Switch UI to Current Ride
         self.btn_current.setChecked(True)
@@ -653,9 +808,6 @@ class MainWindow(QMainWindow):
         # Build a payload compatible with load_for_driver
         match_payload = dict(payload)
         match_payload.setdefault("request_id", request_id)
-
-        passenger_info = payload.get("passenger_info", {})
-        self.other_party_name = passenger_info.get("name", "Them")
 
         self.current_ride_page.load_for_driver(match_payload)
 
@@ -687,16 +839,10 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    # default theme
-    app.setStyleSheet(DARK_STYLESHEET)
-
+    apply_bento_theme(app)
     window = MainWindow()
-    window.theme = "dark"  # so bubbles know what to use
     window.show()
     sys.exit(app.exec_())
-
 
 if __name__ == "__main__":
     main()
