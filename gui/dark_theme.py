@@ -237,20 +237,7 @@ QScrollBar::add-line, QScrollBar::sub-line {
     background: transparent;
 }
 
-/* ===== Chat box ===== */
-QTextEdit {
-    background-color: transparent;
-    color: inherit;
-    border: none;
-}
 
-/* Chat input */
-QLineEdit[objectName="chatInput"] {
-    background-color: rgba(15,23,42,0.9);
-    border-radius: 999px;
-    padding: 8px 12px;
-    border: 1px solid rgba(148,163,184,0.35);
-}
 
 /* ===== Checkboxes (modern, unified) ===== */
 QCheckBox {
