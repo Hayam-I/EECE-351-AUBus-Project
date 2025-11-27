@@ -3,9 +3,11 @@ import traceback
 import socket
 import uuid
 import threading
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QStackedWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTabWidget, QMessageBox)
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QStackedWidget, QVBoxLayout, 
+    QHBoxLayout, QPushButton, QTabWidget, QMessageBox
+)
 from PyQt5.QtCore import pyqtSignal
-
 
 #page imports
 from gui.dark_theme import DARK_STYLESHEET
@@ -50,7 +52,7 @@ def set_visible(widget, visible: bool):
 
 
 # =============================================================================
-# Main window: wires everything together
+# MainWindow puts everything together
 # =============================================================================
 class MainWindow(QMainWindow):
     incoming_p2p_connection = pyqtSignal(object, tuple)
@@ -60,7 +62,7 @@ class MainWindow(QMainWindow):
         self.setObjectName("MainWindow")
         self.resize(1000, 650)
 
-        # Persistent session (used by login + profile + schedule + ride)
+        # persistent session (used by login, profile, schedule, ride)
         self.session = JsonlSession(HOST, PORT, SOCKET_TIMEOUT)
         self.session.push_reveived.connect(self.on_push_received)
 
@@ -76,7 +78,6 @@ class MainWindow(QMainWindow):
         self.root = QStackedWidget()
         self.setCentralWidget(self.root)
 
-        # ---- Auth Page ----
         self.auth_page = QWidget()
         v_auth = QVBoxLayout(self.auth_page)
         tabs = QTabWidget()
@@ -85,9 +86,15 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.login_tab, "Login")
         tabs.addTab(self.register_tab, "Register")
         v_auth.addWidget(tabs, 1)
+
+        self.auth_theme_btn = QPushButton()
+        auth_bottom = QHBoxLayout()
+        auth_bottom.addStretch(1)
+        auth_bottom.addWidget(self.auth_theme_btn)
+        v_auth.addLayout(auth_bottom)
+        
         self.root.addWidget(self.auth_page)
 
-        # ---- App Page ----
         self.app_page = QWidget()
         self.root.addWidget(self.app_page)
         h = QHBoxLayout(self.app_page)
@@ -114,6 +121,8 @@ class MainWindow(QMainWindow):
 
         self.current_theme = "dark"
         self.btn_theme.clicked.connect(self.toggle_theme)
+        self.auth_theme_btn.clicked.connect(self.toggle_theme)
+        self.update_theme_buttons()
 
         self.stack = QStackedWidget()
 
@@ -147,10 +156,8 @@ class MainWindow(QMainWindow):
         h.addWidget(left)
         h.addWidget(center, 1)
 
-        # connect login signal
         self.login_tab.logged_in.connect(self.after_login)
 
-        # Schedule initially disabled until we know driver mode
         self.set_schedule_enabled(False)
 
     def set_theme(self, theme: str):
@@ -162,11 +169,10 @@ class MainWindow(QMainWindow):
 
 
     def set_schedule_enabled(self, on: bool):
-        return #since passenger has to know
+        return
 
     def after_login(self, user_preview: dict):
         self.user_preview = user_preview
-        # Profile screen
         profile = ProfileScreen(self.session, user_preview)
         profile.driverModeChanged.connect(self.on_driver_mode_changed)
         user_preview.setdefault("rating_avg", 0.0)
@@ -186,6 +192,14 @@ class MainWindow(QMainWindow):
         self.btn_profile.setChecked(True)
 
         
+    def update_theme_buttons(self):
+        """Update text on both sidebar + auth theme buttons."""
+        label = "Light mode" if getattr(self, "current_theme", "dark") == "dark" else "Dark mode"
+        self.btn_theme.setText(label)
+        if hasattr(self, "auth_theme_btn"):
+            self.auth_theme_btn.setText(label)
+
+    
     def show_profile_page(self):
         """
         Whenever the user opens Profile, synchronously ask the server for the
@@ -236,7 +250,6 @@ class MainWindow(QMainWindow):
         else:
             self.stop_p2p_listener()
 
-        # ----- swap schedule page (driver vs passenger) -----
         if hasattr(self, "schedule_page"):
             self.stack.removeWidget(self.schedule_page)
             self.schedule_page.deleteLater()
@@ -248,7 +261,6 @@ class MainWindow(QMainWindow):
 
         self.stack.addWidget(self.schedule_page)
 
-        # ----- swap ride page (driver/passenger views) -----
         if hasattr(self, "ride_page"):
             self.stack.removeWidget(self.ride_page)
             self.ride_page.deleteLater()
@@ -272,7 +284,6 @@ class MainWindow(QMainWindow):
                     "payload": {}
                 }
                 try:
-                    # best-effort logout; ignore errors
                     self.session.request(req)
                 except Exception:
                     pass
@@ -292,7 +303,7 @@ class MainWindow(QMainWindow):
                "payload": {}}
             self.session.request(req)
         except Exception:
-            # If network fails, still locally reset
+            # if network fails, still locally reset
             pass
 
         self.stop_p2p_listener() #stop p2p
@@ -433,11 +444,12 @@ class MainWindow(QMainWindow):
         if getattr(self, "current_theme", "dark") == "dark":
             self.current_theme = "light"
             apply_theme("light")
-            self.btn_theme.setText("Dark mode")
         else:
             self.current_theme = "dark"
             apply_theme("dark")
-            self.btn_theme.setText("Light mode")
+        self.update_theme_buttons()
+
+
 
 
     def on_push_received(self, msg: dict):

@@ -1,28 +1,18 @@
-import sys
-import traceback
 import json
 import re
 import socket
 import uuid
-import threading
-import logging
-import html
-from client.map_selector import MapSelector
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QStackedWidget,
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
-    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QSpinBox
+    QWidget, QVBoxLayout, QPushButton, QLabel, QFormLayout, QLineEdit, QMessageBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
-from PyQt5.QtGui import QTextCursor, QPixmap
+from PyQt5.QtCore import Qt
 
-# ===== validation regex (mirror server) =====
+# validation regex
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,20}$")
 PASSWORD_RE = re.compile(r"^.{6,20}$")
 EMAIL_RE    = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 
-# ===== transport config =====
+# transport config
 HOST = "127.0.0.1"
 PORT = 6000
 SOCKET_TIMEOUT = 4.0

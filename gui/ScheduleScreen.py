@@ -1,23 +1,10 @@
-import sys
-import traceback
-import json
-import re
-import socket
 import uuid
-import threading
-import logging
-import html
 from client.map_selector import MapSelector
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QStackedWidget,
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
-    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QSpinBox
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit,
+    QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QTimeEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
-from PyQt5.QtGui import QTextCursor, QPixmap
-
-
+from PyQt5.QtCore import Qt
 from gui.session import JsonlSession
 
 
@@ -119,7 +106,6 @@ class ScheduleScreen(QWidget):
         self.selected_lon = lon
         self.show_ok(f"Pickup location selected ✓ (lat={lat:.5f}, lon={lon:.5f})")
 
-    # ---- helpers ----
     def show_error(self, msg):
         self.err.setText(msg)
         self.err.setVisible(True)
@@ -148,7 +134,6 @@ class ScheduleScreen(QWidget):
             self.btn_pick_location.setText("Pick drop-off area on map")
 
 
-    # ---- CRUD ----
     def refresh(self):
         current_row = self.table.currentRow()
         selected_sched_id = None

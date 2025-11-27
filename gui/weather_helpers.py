@@ -1,29 +1,9 @@
-#TEST
-import sys
-import traceback
 import json
-import re
-import socket
-import uuid
-import threading
-import logging
-import html
-from client.map_selector import MapSelector
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QStackedWidget,
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
-    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QSpinBox
-)
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
-from PyQt5.QtGui import QTextCursor, QPixmap
-from gui.p2p_chat_endpoint import P2PChatEndpoint
-
+from PyQt5.QtGui import QPixmap
 import requests
-from io import BytesIO
 
 
-#==== weather api constants ======
+# weather api constants
 WEATHER_API_URL = "http://api.weatherapi.com/v1/current.json"
 WEATHER_API_KEY = "77ba44421ca942b892a154619252311"
 

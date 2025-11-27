@@ -1,21 +1,9 @@
-import sys
-import traceback
-import json
-import re
-import socket
 import uuid
-import threading
-import logging
-import html
-from client.map_selector import MapSelector
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QStackedWidget,
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
-    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QSpinBox
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QMessageBox,
+    QComboBox, QTableWidget, QTableWidgetItem, QHeaderView
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
-
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from gui.session import JsonlSession
 
 

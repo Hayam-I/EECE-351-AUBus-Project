@@ -1,27 +1,13 @@
-import sys
-import traceback
-import json
-import re
-import socket
 import uuid
-import threading
-import logging
-import html
-from client.map_selector import MapSelector
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QStackedWidget,
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
-    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QSpinBox
+    QWidget,
+    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFormLayout,
+    QLineEdit, QCheckBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
-from PyQt5.QtGui import QTextCursor, QPixmap
-from gui.p2p_chat_endpoint import P2PChatEndpoint
-
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QPixmap
 import requests
-
 #page imports
-
 from gui.weather_helpers import fetch_weather_for_coords
 from gui.session import JsonlSession
 
@@ -48,7 +34,6 @@ class ProfileScreen(QWidget):
             "rating_count": user_preview.get("rating_count",0)
         }
 
-        # ---- basic fields ----
         self.in_name = QLineEdit(self.snapshot["name"])
         self.in_name.setObjectName("profileField")
         self.in_email = QLineEdit(self.snapshot["email"])
@@ -58,7 +43,6 @@ class ProfileScreen(QWidget):
         self.chk_driver = QCheckBox("Driver Mode")
         self.chk_driver.setChecked(self.snapshot["is_driver"])
 
-        # ---- vehicle fields (used only when driver) ----
         self.in_vehicle_make  = QLineEdit(self.snapshot["vehicle_make"])
         self.in_vehicle_model = QLineEdit(self.snapshot["vehicle_model"])
         self.in_vehicle_color = QLineEdit(self.snapshot["vehicle_color"])
@@ -69,7 +53,6 @@ class ProfileScreen(QWidget):
         self.in_vehicle_color.setPlaceholderText("e.g. White")
         self.in_vehicle_plate.setPlaceholderText("e.g. B 123456")
 
-        # Stronger style for profile fields (reuse for vehicle fields)
         profile_field_css = """
         QLineEdit#profileField,
         QLineEdit#profileField:disabled,
@@ -82,7 +65,6 @@ class ProfileScreen(QWidget):
         }
         """
 
-        # apply style
         self.in_name.setStyleSheet(profile_field_css)
         self.in_email.setStyleSheet(profile_field_css)
         self.in_area.setStyleSheet(profile_field_css)
@@ -97,7 +79,6 @@ class ProfileScreen(QWidget):
             w.setMinimumWidth(300)
             w.setMaximumWidth(420)
 
-        # ---- form layout ----
         self.form = QFormLayout()
         form = self.form
         form.setLabelAlignment(Qt.AlignRight)
@@ -110,7 +91,6 @@ class ProfileScreen(QWidget):
         form.addRow("Area:", self.in_area)
         form.addRow("", self.chk_driver)
 
-        # vehicle fields always visible but disabled when not a driver
         form.addRow("Car make:", self.in_vehicle_make)
         form.addRow("Car model:", self.in_vehicle_model)
         form.addRow("Car color:", self.in_vehicle_color)
@@ -147,7 +127,6 @@ class ProfileScreen(QWidget):
         self.btn_save.clicked.connect(self.on_save)
         self.btn_cancel.clicked.connect(self.on_cancel)
 
-        # Driver checkbox toggles vehicle fields
         self.chk_driver.toggled.connect(self._on_driver_toggled)
 
         root = QVBoxLayout(self)
@@ -166,15 +145,11 @@ class ProfileScreen(QWidget):
         root.addLayout(buttons)
         root.addStretch(1)
 
-        # start in view mode
         self.set_edit_mode(False)
-        # set proper enabled/disabled state for vehicle fields
         self._update_vehicle_visibility(self.snapshot["is_driver"])
         self._on_driver_toggled(self.snapshot["is_driver"])
-        # load weather
         self.on_weather_clicked()
 
-    # ---------- helpers ----------
     def set_edit_mode(self, on: bool):
         editing = bool(on)
         for w in (self.in_name, self.in_email, self.in_area,
@@ -183,7 +158,6 @@ class ProfileScreen(QWidget):
             w.setReadOnly(not editing)
         self.chk_driver.setEnabled(editing)
 
-        # but even in edit mode, only enable vehicle fields if driver is checked
         self._on_driver_toggled(self.chk_driver.isChecked())
 
         self.btn_edit.setEnabled(not editing)
@@ -195,10 +169,8 @@ class ProfileScreen(QWidget):
         """Enable + show car fields only when driver mode is ON."""
         is_driver = bool(checked)
 
-        # visibility
         self._update_vehicle_visibility(is_driver)
 
-        # enabled state (only if not read-only)
         for w in (self.in_vehicle_make, self.in_vehicle_model,
                   self.in_vehicle_color, self.in_vehicle_plate):
             w.setEnabled(is_driver and not w.isReadOnly())
@@ -252,7 +224,6 @@ class ProfileScreen(QWidget):
             self.lbl_rating.setText(f"{avg:.1f}")
 
 
-    # ---------- buttons ----------
     def on_edit(self):
         self.reset_fields_from_snapshot()
         self.set_edit_mode(True)
@@ -269,7 +240,6 @@ class ProfileScreen(QWidget):
 
         is_driver = bool(self.chk_driver.isChecked())
 
-        # If driver mode ON => car details are required
         make  = self.in_vehicle_make.text().strip()
         model = self.in_vehicle_model.text().strip()
         color = self.in_vehicle_color.text().strip()
@@ -301,7 +271,6 @@ class ProfileScreen(QWidget):
 
         if resp.get("type") == "PROFILE.SET_RES":
             prev_driver = self.snapshot["is_driver"]
-            # update snapshot
             self.snapshot["name"] = payload["name"]
             self.snapshot["email"] = payload["email"]
             self.snapshot["area"] = payload["area"]
@@ -321,7 +290,7 @@ class ProfileScreen(QWidget):
             self.show_error(f"Unexpected response: {resp.get('type')}")
 
     def on_weather_clicked(self):
-        # Beirut loc
+        # beirut loc for api
         lat, lon = 33.8938, 35.5018
 
         self.weather_label.setWordWrap(False)

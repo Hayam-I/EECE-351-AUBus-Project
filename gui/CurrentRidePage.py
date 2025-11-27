@@ -1,11 +1,8 @@
 import html
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QStackedWidget,
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
-    QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QSpinBox
+    QWidget,QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMessageBox, QTextEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
+from PyQt5.QtCore import Qt, QDateTime
 from PyQt5.QtGui import QTextCursor, QTextBlockFormat
 
 
@@ -17,25 +14,25 @@ class CurrentRidePage(QWidget):
 
         v = QVBoxLayout(self)
 
-        # Top info label (who you're riding with)
+        # te top info label (who you're riding with)
         self.info_label = QLabel("No active ride")
         self.info_label.setWordWrap(True)
         v.addWidget(self.info_label)
 
-        # Chat area
+        # chat area
         self.chat_box = QTextEdit()
         self.chat_box.setReadOnly(True)
         self.chat_box.setStyleSheet("QTextEdit, QTextEdit * { background: transparent; }")
 
         v.addWidget(self.chat_box, 1)
 
-        # Chat input
+        # hat input
         self.chat_input = QLineEdit()
         self.chat_input.setObjectName("chatInput")  # so stylesheet can target it
         self.chat_input.setPlaceholderText("Type a message...")
         v.addWidget(self.chat_input)
 
-        # Buttons row
+        # buttons row
         h = QHBoxLayout()
         self.send_btn = QPushButton("Send")
         self.complete_btn = QPushButton("Complete Ride")
@@ -51,9 +48,6 @@ class CurrentRidePage(QWidget):
 
 
 
-    # ===== Chat bubbles =====
-
-
     def append_bubble(self, text: str, outgoing: bool, timestamp=None):
         """
         Chat bubbles with proper left/right alignment using QTextBlockFormat.
@@ -67,7 +61,6 @@ class CurrentRidePage(QWidget):
         other_name = getattr(mw, "other_party_name", "Them") if mw else "Them"
         is_dark = getattr(mw, "is_dark_mode", True)
 
-        # Colors (same as you had)
         if outgoing:
             align = Qt.AlignRight
             bg = "#4f46e5"
@@ -87,7 +80,6 @@ class CurrentRidePage(QWidget):
             timestamp = QDateTime.currentDateTime()
         ts = timestamp.toString("HH:mm")
 
-        # Inner bubble HTML (no outer div controlling alignment)
         bubble_html = f"""
         <span style="
             display:inline-block;
@@ -112,16 +104,13 @@ class CurrentRidePage(QWidget):
         cursor = self.chat_box.textCursor()
         cursor.movePosition(QTextCursor.End)
 
-        # New paragraph for this message
         cursor.insertBlock()
         block_fmt = QTextBlockFormat()
         block_fmt.setAlignment(align)
         cursor.setBlockFormat(block_fmt)
 
-        # Insert the bubble in this block
         cursor.insertHtml(bubble_html)
 
-        # Extra blank block as spacing
         cursor.insertBlock()
 
         self.chat_box.setTextCursor(cursor)
@@ -130,7 +119,6 @@ class CurrentRidePage(QWidget):
 
 
 
-    # ===== Sending =====
     def on_send_clicked(self):
         msg = self.chat_input.text().strip()
         if not msg:
@@ -147,20 +135,17 @@ class CurrentRidePage(QWidget):
         else:
             QMessageBox.warning(self, "Send Failed", "Failed to send message.")
 
-    # ===== Load ride state  =====
     def load_for_passenger(self, payload: dict):
         """
         Configure the 'current ride' view when we are the PASSENGER.
         MainWindow passes the full RIDE.MATCHED payload.
         """
-        # Clear previous chat
         self.chat_box.clear()
         self.chat_input.clear()
 
         driver = (payload or {}).get("driver_info") or {}
         name = driver.get("name") or driver.get("username") or "Driver"
 
-        # Build a nice one-line info text
         parts = [f"Ride with {name}"]
 
         rating_avg = driver.get("rating_avg")
@@ -185,7 +170,6 @@ class CurrentRidePage(QWidget):
 
         self.info_label.setText(" ".join(parts))
 
-        # Passenger cannot complete the ride directly
         self.complete_btn.hide()
 
     def load_for_driver(self, payload: dict):
@@ -194,7 +178,6 @@ class CurrentRidePage(QWidget):
         MainWindow will call this with the driver-side match payload
         (usually has passenger_info instead of driver_info).
         """
-        # Clear previous chat
         self.chat_box.clear()
         self.chat_input.clear()
 
