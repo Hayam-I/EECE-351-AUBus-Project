@@ -1279,16 +1279,6 @@ def handle_message(msg: dict, conn_state: dict):
         else:
             min_driver_rating = 0.0
         
-        if min_driver_rating > 0.0 and candidate_ids:
-            cur2 = conn.cursor()
-            filtered_ids = []
-            for did in candidate_ids:
-                cur2.execute("SELECT COALESCE(rating_avg, 0.0) FROM users WHERE user_id=?", (did,))
-                row = cur2.fetchone()
-                rating = float(row[0]) if row and row[0] is not None else 0.0
-                if rating >= min_driver_rating:
-                    filtered_ids.append(did)
-            candidate_ids = filtered_ids
 
         if not isinstance(area, str) or not area.strip():
             return {
