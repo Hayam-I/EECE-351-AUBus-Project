@@ -73,7 +73,7 @@ class RideRequestPage(QWidget):
         self.min_driver_rating_combo.addItem("1 ★ and up", 1.0)
         self.min_driver_rating_combo.addItem("2 ★ and up", 2.0)
         self.min_driver_rating_combo.addItem("3 ★ and up", 3.0)
-        self.min_driver_rating_combo.addItem("4 ★ only", 4.0)
+        self.min_driver_rating_combo.addItem("4 ★ and up", 4.0)
         self.min_driver_rating_combo.addItem("5 ★ only", 5.0)
 
 

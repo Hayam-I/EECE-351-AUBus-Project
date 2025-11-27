@@ -1433,6 +1433,7 @@ def handle_message(msg: dict, conn_state: dict):
                 REQUEST_PASSENGERS[request_id] = {
                     "user_id": uid,
                     "sock": conn_state.get("sock"),
+                    "min_driver_rating": min_driver_rating,
                 }
 
             sent = _broadcast_driver_candidates(request_id, passenger_preview, candidate_ids)
@@ -1478,6 +1479,14 @@ def handle_message(msg: dict, conn_state: dict):
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
 
+            # Get this driver's current rating once
+            cur.execute(
+                "SELECT COALESCE(rating_avg, 0.0) FROM users WHERE user_id=?",
+                (driver_id,),
+            )
+            row = cur.fetchone()
+            driver_rating = float(row[0]) if row and row[0] is not None else 0.0
+
             # Driver's schedules, including lat/lon
             cur.execute(
                 """
@@ -1487,6 +1496,7 @@ def handle_message(msg: dict, conn_state: dict):
                 """,
                 (driver_id,),
             )
+
             driver_scheds = cur.fetchall()
 
             if not driver_scheds:
@@ -1523,6 +1533,7 @@ def handle_message(msg: dict, conn_state: dict):
 
             for req_id_int, passenger_id, area, direction, dep_time, plat, plon, passenger_rating in req_rows:
                 
+                # 1) driver's own filter: minimum passenger rating
                 try:
                     passenger_rating = float(passenger_rating or 0.0)
                 except (TypeError, ValueError):
@@ -1531,6 +1542,22 @@ def handle_message(msg: dict, conn_state: dict):
                 if min_passenger_rating > 0.0 and passenger_rating < min_passenger_rating:
                     continue
 
+                # 2) passenger's filter: minimum driver rating for THIS request
+                request_key = f"req_{req_id_int}"
+                min_driver_req = 0.0
+                with STATE_LOCK:
+                    pinfo = REQUEST_PASSENGERS.get(request_key)
+                if pinfo is not None:
+                    try:
+                        min_driver_req = float(pinfo.get("min_driver_rating") or 0.0)
+                    except (TypeError, ValueError):
+                        min_driver_req = 0.0
+
+                if min_driver_req > 0.0 and driver_rating < min_driver_req:
+                    # This passenger does not want drivers below min_driver_req stars
+                    continue
+
+                # 3) geo + time compatibility
                 try:
                     plat = float(plat)
                     plon = float(plon)
@@ -1574,13 +1601,11 @@ def handle_message(msg: dict, conn_state: dict):
                 if passenger_id == driver_id:
                     continue
 
-                request_key = f"req_{req_id_int}"
-
                 items.append(
                     {
                         "request_id": request_key,
                         "user_id": f"user_{passenger_id}",
-                        "area": area,  # for display only
+                        "area": area,
                         "direction": direction,
                         "time_iso": dep_time,
                     }
