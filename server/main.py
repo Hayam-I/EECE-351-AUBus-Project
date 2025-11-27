@@ -887,6 +887,181 @@ def _free_driver(driver_id: int):
     with STATE_LOCK:
         BUSY_DRIVERS.discard(driver_id)
 
+def _ride_rate(conn_state, payload, mid):
+    """
+    Handle RIDE.RATE_REQ: one side rates the other after a completed ride.
+
+    payload: {
+        "request_id": "req_<int>",
+        "rating": 1..5
+    }
+    """
+    rater_id, err = require_logged_in(conn_state, mid)
+    if err:
+        return err
+
+    p = payload or {}
+    req_s = p.get("request_id")
+    rating = p.get("rating")
+
+    # validate request_id
+    req_id_int = _reqid_to_int(req_s)
+    if not isinstance(req_id_int, int):
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "BAD_REQUEST", "message": "invalid request_id"},
+        }
+
+    # validate rating
+    if not isinstance(rating, int) or not (1 <= rating <= 5):
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "BAD_REQUEST", "message": "invalid rating"},
+        }
+
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        # 1) Find the match for this request
+        #    (one match per request in your schema)
+        cur.execute(
+            """
+            SELECT match_id, user_id, driver_id, status
+            FROM matches
+            WHERE request_id=?
+            ORDER BY match_id DESC
+            LIMIT 1
+            """,
+            (req_id_int,),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "NOT_FOUND",
+                    "message": "no match found for this request",
+                },
+            }
+
+        match_id, passenger_id, driver_id, status = row
+
+        # Only participants can rate
+        if rater_id not in (passenger_id, driver_id):
+            conn.close()
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "FORBIDDEN",
+                    "message": "you are not part of this ride",
+                },
+            }
+
+        # Optionally enforce only completed/active rides
+        if status not in ("active", "completed"):
+            conn.close()
+            return {
+                "type": "ERROR",
+                "id": mid,
+                "payload": {
+                    "code": "INVALID_STATE",
+                    "message": "cannot rate this ride in its current state",
+                },
+            }
+
+        # Who is being rated?
+        if rater_id == driver_id:
+            rated_id = passenger_id
+        else:
+            rated_id = driver_id
+
+        # 2) Upsert into ratings table
+        #    (one rating per rated user per match: UNIQUE(match_id, user2_id))
+        cur.execute(
+            """
+            SELECT rating_id, stars
+            FROM ratings
+            WHERE match_id=? AND user2_id=?
+            """,
+            (match_id, rated_id),
+        )
+        existing = cur.fetchone()
+        if existing:
+            rating_id, _old_stars = existing
+            cur.execute(
+                "UPDATE ratings SET stars=? WHERE rating_id=?",
+                (rating, rating_id),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO ratings(match_id, user1_id, user2_id, stars, comment)
+                VALUES (?, ?, ?, ?, NULL)
+                """,
+                (match_id, rater_id, rated_id, rating),
+            )
+
+        # 3) Recompute aggregates for rated user from ratings table
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(stars),0), COUNT(*)
+            FROM ratings
+            WHERE user2_id=?
+            """,
+            (rated_id,),
+        )
+        sum_stars, count_stars = cur.fetchone()
+        sum_stars = int(sum_stars or 0)
+        count_stars = int(count_stars or 0)
+        avg = float(sum_stars) / count_stars if count_stars > 0 else 0.0
+
+        cur.execute(
+            """
+            UPDATE users
+            SET rating_sum=?, rating_avg=?, rating_count=?
+            WHERE user_id=?
+            """,
+            (sum_stars, avg, count_stars, rated_id),
+        )
+
+        conn.commit()
+        conn.close()
+
+        # Respond with updated rating info so GUI can refresh
+        return {
+            "type": "RIDE.RATE_RES",
+            "id": mid,
+            "payload": {
+                "request_id": f"req_{req_id_int}",
+                "match_id": match_id,
+                "rated_user_id": f"user_{rated_id}",
+                "rating": rating,
+                "rating_avg": avg,
+                "rating_count": count_stars,
+            },
+        }
+
+    except Exception:
+        logging.exception("RIDE.RATE_REQ failed")
+        try:
+            if conn:
+                conn.rollback()
+                conn.close()
+        except Exception:
+            pass
+        return {
+            "type": "ERROR",
+            "id": mid,
+            "payload": {"code": "SERVER_ERROR", "message": "Internal error"},
+        }
+
 def _ride_complete(conn_state, payload, mid):
     driver_id, err = require_logged_in(conn_state, mid)
     if err:
@@ -1577,6 +1752,9 @@ def handle_message(msg: dict, conn_state: dict):
         logging.info("PEER.OPEN: user_%s reachable at %s:%s", uid, ip, port)
 
         return {"type": "PEER.OPEN_RES", "id": mid, "payload": {"ip": ip, "port": port}}
+    
+    if mtype == "RIDE.RATE_REQ":
+        return _ride_rate(conn_state, payload, mid)
     
     if mtype == "RIDE.COMPLETE_REQ":
         return _ride_complete(conn_state, payload, mid)

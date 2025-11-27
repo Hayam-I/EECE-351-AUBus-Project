@@ -249,7 +249,7 @@ class ProfileScreen(QWidget):
         if count <= 0:
             self.lbl_rating.setText("No reviews yet")
         else:
-            self.lbl_rating.setText(f"{avg:.1f} ({count} reviews)")
+            self.lbl_rating.setText(f"{avg:.1f}")
 
 
     # ---------- buttons ----------

@@ -131,7 +131,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.current_ride_page)
         self.current_ride_page.complete_btn.clicked.connect(self.complete_ride)
 
-        self.btn_profile.clicked.connect(lambda: self.stack.setCurrentWidget(self.profile_page))
+        self.btn_profile.clicked.connect(self.show_profile_page)
         self.btn_sched.clicked.connect(lambda: self.stack.setCurrentWidget(self.schedule_page))
         self.btn_ride.clicked.connect(lambda: self.stack.setCurrentWidget(self.ride_page))
         self.btn_current.clicked.connect(lambda: self.stack.setCurrentWidget(self.current_ride_page))
@@ -178,14 +178,55 @@ class MainWindow(QMainWindow):
         self.profile_page = profile
         self.stack.insertWidget(0, self.profile_page)
 
-        
         is_driver = bool(user_preview.get("is_driver", False))
         self.on_driver_mode_changed(is_driver)
 
         self.root.setCurrentWidget(self.app_page)
         self.stack.setCurrentWidget(self.profile_page)
         self.btn_profile.setChecked(True)
+
         
+    def show_profile_page(self):
+        """
+        Whenever the user opens Profile, synchronously ask the server for the
+        latest profile (including updated rating) and immediately refresh the UI.
+        """
+        if self.session is not None:
+            req = {
+                "type": "PROFILE.GET_REQ",
+                "id": str(uuid.uuid4()),
+                "payload": {}  # current user
+            }
+            try:
+                # Use request() so we get the response right here
+                resp = self.session.request(req)
+                if resp.get("type") == "PROFILE.GET_RES":
+                    user = (resp.get("payload") or {}).get("user") or {}
+
+                    if self.user_preview is None:
+                        self.user_preview = {}
+
+                    # merge fresh data
+                    self.user_preview.update(user)
+
+                    # server returns 'rating' = rating_avg from users table
+                    rating = user.get("rating")
+                    if rating is not None:
+                        self.user_preview["rating_avg"] = rating
+
+                    # let ProfileScreen repaint itself
+                    if hasattr(self, "profile_page") and self.profile_page is not None:
+                        try:
+                            self.profile_page.update_from_user_preview(self.user_preview)
+                        except Exception as e:
+                            print("show_profile_page: failed to update profile screen:", e)
+
+            except Exception as e:
+                print("PROFILE.GET_REQ failed:", e)
+
+        # finally, show the profile page
+        self.stack.setCurrentWidget(self.profile_page)
+
 
 
     def on_driver_mode_changed(self, is_driver: bool):
@@ -470,6 +511,36 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     print("profile update failed:", e)
 
+        elif t == "RIDE.RATE_RES":
+            # after rating, ask server for fresh profile
+            self.session.send_json({
+                "type": "PROFILE.GET_REQ",
+                "id": str(uuid.uuid4()),
+                "payload": {}  # current user
+            })
+        
+        elif t == "PROFILE.GET_RES":
+            # Response to PROFILE.GET_REQ: refresh local preview and profile screen
+            user = payload.get("user") or {}
+            if not user:
+                return
+
+            if self.user_preview is None:
+                self.user_preview = {}
+
+            # Update preview with whatever came from the server
+            self.user_preview.update(user)
+
+            # PROFILE.GET_RES returns `rating`, but ProfileScreen expects rating_avg
+            rating = user.get("rating")
+            if rating is not None:
+                self.user_preview["rating_avg"] = rating
+
+            if hasattr(self, "profile_page") and self.profile_page is not None:
+                try:
+                    self.profile_page.update_from_user_preview(self.user_preview)
+                except Exception as e:
+                    print("PROFILE.GET_RES: failed to update profile screen:", e)
 
     def on_ride_matched(self, msg: dict):
         payload = msg.get("payload", {})
@@ -521,6 +592,18 @@ class MainWindow(QMainWindow):
                 dlg.exec_()
 
             self.return_to_idle_state()
+    
+    def on_server_message(self, msg: dict):
+        t = msg.get("type")
+        p = msg.get("payload") or {}
+
+        if t == "PROFILE.GET_RES":
+            user = p.get("user") or {}
+            self.current_user_profile = user
+            self.profile_page.update_from_profile(user)
+
+    
+    
 
 
 
