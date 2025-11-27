@@ -68,6 +68,14 @@ class RideRequestPage(QWidget):
         self.btn_cancel.clicked.connect(self.on_cancel_clicked)
         self._update_direction_hints()
 
+        self.min_driver_rating_combo = QComboBox(self)
+        self.min_driver_rating_combo.addItem("Any rating", 0.0)
+        self.min_driver_rating_combo.addItem("1 ★ and up", 1.0)
+        self.min_driver_rating_combo.addItem("2 ★ and up", 2.0)
+        self.min_driver_rating_combo.addItem("3 ★ and up", 3.0)
+        self.min_driver_rating_combo.addItem("4 ★ only", 4.0)
+        self.min_driver_rating_combo.addItem("5 ★ only", 5.0)
+
 
         # ---- Layout ----
         form = QFormLayout()
@@ -77,9 +85,10 @@ class RideRequestPage(QWidget):
         form.setVerticalSpacing(10)
 
         form.addRow("Area:", self.in_area)
-        form.addRow("", self.btn_pick_location)       # MAP BUTTON HERE
+        form.addRow("", self.btn_pick_location)       
         form.addRow("Direction:", self.cb_direction)
         form.addRow("Departure Time:", self.dt)
+        form.addRow(QLabel("Min driver rating:"), self.min_driver_rating_combo)
 
         self.err = QLabel("")
         self.err.setWordWrap(True)
@@ -187,13 +196,26 @@ class RideRequestPage(QWidget):
             self.show_error("Please pick your location on the map.")
             return
 
+
+        min_driver_rating = float(self.min_driver_rating_combo.currentData() or 0.0)
+
         payload = {
-            "area": area,  # kept for display, NOT used for matching
+            "area": area,
             "direction": self.cb_direction.currentText(),
             "time_iso": self._iso_string(),
-            "lat": float(self.selected_lat),
+            "lat":  float(self.selected_lat),
             "lon": float(self.selected_lon),
         }
+        
+        if min_driver_rating > 0.0:
+            payload["min_driver_rating"] = min_driver_rating
+
+        self.session.send_json({
+            "type": "RIDE.REQUEST_REQ",
+            "id": str(uuid.uuid4()),
+            "payload": payload,
+        })
+
 
         req = {"type": "RIDE.REQUEST_REQ", "id": str(uuid.uuid4()), "payload": payload}
 

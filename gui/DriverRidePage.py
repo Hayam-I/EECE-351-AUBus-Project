@@ -41,13 +41,29 @@ class DriverRidePage(QWidget):
         self.ok.setStyleSheet("color: #0a7a0a;")
         self.ok.setVisible(False)
 
+        self.min_pass_rating_combo = QComboBox(self)
+        self.min_pass_rating_combo.addItem("Any passenger", 0.0)
+        self.min_pass_rating_combo.addItem("1 ★ and up", 1.0)
+        self.min_pass_rating_combo.addItem("2 ★ and up", 2.0)
+        self.min_pass_rating_combo.addItem("3 ★ and up", 3.0)
+        self.min_pass_rating_combo.addItem("4 ★ and up", 4.0)
+        self.min_pass_rating_combo.addItem("5 ★ only", 5.0)
+
+        
+
         self.btn_refresh = QPushButton("Refresh now")
         self.btn_accept = QPushButton("Accept selected")
 
         self.btn_refresh.clicked.connect(self.refresh)
         self.btn_accept.clicked.connect(self.on_accept_selected)
+        self.min_pass_rating_combo.currentIndexChanged.connect(self.refresh)
 
         top = QHBoxLayout()
+
+        top.addWidget(QLabel("Min passenger rating:"))
+        top.addWidget(self.min_pass_rating_combo)
+
+
         top.addWidget(self.btn_refresh)
         top.addWidget(self.btn_accept)
         top.addStretch(1)
@@ -78,10 +94,16 @@ class DriverRidePage(QWidget):
         self.err.setVisible(False)
 
     def refresh(self):
+        min_passenger_rating = float(self.min_pass_rating_combo.currentData() or 0.0)
+
+        payload = {}
+        if min_passenger_rating > 0.0:
+            payload["min_passenger_rating"] = min_passenger_rating
+
         req = {
             "type": "RIDE.LIST_REQ",
             "id": str(uuid.uuid4()),
-            "payload": {},
+            "payload": payload,
         }
         try:
             resp = self.session.request(req)
@@ -113,8 +135,11 @@ class DriverRidePage(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(area))
             self.table.setItem(row, 2, QTableWidgetItem(direction))
             self.table.setItem(row, 3, QTableWidgetItem(time_iso))
+        
+        
 
         self.show_ok(f"Loaded {len(items)} compatible requests.")
+    
 
     def on_accept_selected(self):
         r = self.table.currentRow()

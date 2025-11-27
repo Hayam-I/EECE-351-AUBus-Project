@@ -1266,11 +1266,29 @@ def handle_message(msg: dict, conn_state: dict):
             return err
 
         p = payload or {}
-        area = p.get("area")           # still required for display
+        area = p.get("area")          
         direction = p.get("direction")
         time_iso = p.get("time_iso")
         lat = p.get("lat")
         lon = p.get("lon")
+        min_driver_rating = p.get("min_driver_rating")
+        if isinstance(min_driver_rating, (int, float)):
+            min_driver_rating = float(min_driver_rating)
+            if not (0.0 <= min_driver_rating <= 5.0):
+                min_driver_rating = 0.0
+        else:
+            min_driver_rating = 0.0
+        
+        if min_driver_rating > 0.0 and candidate_ids:
+            cur2 = conn.cursor()
+            filtered_ids = []
+            for did in candidate_ids:
+                cur2.execute("SELECT COALESCE(rating_avg, 0.0) FROM users WHERE user_id=?", (did,))
+                row = cur2.fetchone()
+                rating = float(row[0]) if row and row[0] is not None else 0.0
+                if rating >= min_driver_rating:
+                    filtered_ids.append(did)
+            candidate_ids = filtered_ids
 
         if not isinstance(area, str) or not area.strip():
             return {
@@ -1389,6 +1407,27 @@ def handle_message(msg: dict, conn_state: dict):
 
                 candidate_ids.append(int(driver_id))
 
+                if min_driver_rating > 0.0 and candidate_ids:
+                    try:
+                        conn2 = sqlite3.connect(DB_PATH)
+                        cur2 = conn2.cursor()
+
+                        filtered_ids = []
+                        for did in candidate_ids:
+                            cur2.execute(
+                                "SELECT COALESCE(rating_avg, 0.0) FROM users WHERE user_id=?",
+                                (did,),
+                            )
+                            row = cur2.fetchone()
+                            driver_rating = float(row[0]) if row and row[0] is not None else 0.0
+                            if driver_rating >= min_driver_rating:
+                                filtered_ids.append(did)
+
+                        conn2.close()
+                        candidate_ids = filtered_ids
+                    except Exception:
+                        logging.exception("filtering candidates by min_driver_rating failed")
+
             passenger_preview = {
                 "user_id": f"user_{uid}",
                 "area": area,
@@ -1434,6 +1473,16 @@ def handle_message(msg: dict, conn_state: dict):
         _ok, derr = require_driver(conn_state, mid)
         if derr:
             return derr
+        
+        p = payload or {}
+        min_passenger_rating = p.get("min_passenger_rating")
+        if isinstance(min_passenger_rating, (int, float)):
+            min_passenger_rating = float(min_passenger_rating)
+            if not (0.0 <= min_passenger_rating <= 5.0):
+                min_passenger_rating = 0.0
+        else:
+            min_passenger_rating = 0.0
+
 
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -1461,9 +1510,17 @@ def handle_message(msg: dict, conn_state: dict):
             # All open ride requests WITH lat/lon
             cur.execute(
                 """
-                SELECT request_id, user_id, area, direction, departure_time, lat, lon
-                FROM ride_req
-                WHERE status='open'
+                SELECT r.request_id,
+                       r.user_id,
+                       r.area,
+                       r.direction,
+                       r.departure_time,
+                       r.lat,
+                       r.lon,
+                       COALESCE(u.rating_avg, 0.0) AS passenger_rating
+                FROM ride_req AS r
+                JOIN users AS u ON u.user_id = r.user_id
+                WHERE r.status='open'
                 """
             )
             req_rows = cur.fetchall()
@@ -1474,8 +1531,16 @@ def handle_message(msg: dict, conn_state: dict):
 
             items = []
 
-            for req_id_int, passenger_id, area, direction, dep_time, plat, plon in req_rows:
-                # Skip requests without coords
+            for req_id_int, passenger_id, area, direction, dep_time, plat, plon, passenger_rating in req_rows:
+                
+                try:
+                    passenger_rating = float(passenger_rating or 0.0)
+                except (TypeError, ValueError):
+                    passenger_rating = 0.0
+
+                if min_passenger_rating > 0.0 and passenger_rating < min_passenger_rating:
+                    continue
+
                 try:
                     plat = float(plat)
                     plon = float(plon)
