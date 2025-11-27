@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QMessageBox, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QSpinBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QDate, QTime
 
 from gui.session import JsonlSession
 
@@ -55,10 +55,10 @@ class RideRequestPage(QWidget):
         self.cb_direction.currentTextChanged.connect(self._update_direction_hints)
 
 
-        self.dt = QDateTimeEdit(QDateTime.currentDateTime())
-        self.dt.setDisplayFormat("yyyy-MM-dd HH:mm")
-        self.dt.setCalendarPopup(True)
-        self.dt.setKeyboardTracking(False)
+        now = QDateTime.currentDateTime()
+        self.time_edit = QTimeEdit(now.time())
+        self.time_edit.setDisplayFormat("HH:mm")
+        self.time_edit.setKeyboardTracking(False)
 
         self.btn_submit = QPushButton("Request Ride")
         self.btn_submit.clicked.connect(self.on_submit)
@@ -87,7 +87,7 @@ class RideRequestPage(QWidget):
         form.addRow("Area:", self.in_area)
         form.addRow("", self.btn_pick_location)       
         form.addRow("Direction:", self.cb_direction)
-        form.addRow("Departure Time:", self.dt)
+        form.addRow("Departure Time:", self.time_edit)
         form.addRow(QLabel("Min driver rating:"), self.min_driver_rating_combo)
 
         self.err = QLabel("")
@@ -138,7 +138,11 @@ class RideRequestPage(QWidget):
         self.err.setVisible(False)
 
     def _iso_string(self) -> str:
-        return self.dt.dateTime().toString("yyyy-MM-dd HH:mm")
+        """Return departure time as ISO string: today's date + chosen time."""
+        today = QDate.currentDate()
+        t = self.time_edit.time()
+        dt = QDateTime(today, t)
+        return dt.toString("yyyy-MM-dd HH:mm")
 
     # =====================================================================
     # MAP HANDLERS
@@ -196,8 +200,21 @@ class RideRequestPage(QWidget):
             self.show_error("Please pick your location on the map.")
             return
 
+        # ---- Time validation: must be today and within the next 30 minutes ----
+        now = QDateTime.currentDateTime()
+        selected_dt = QDateTime(QDate.currentDate(), self.time_edit.time())
+        delta_secs = now.secsTo(selected_dt)
+
+        # If time is in the past or more than 30 minutes ahead, reject
+        if delta_secs < 0 or delta_secs > 30 * 60:
+            self.show_error(
+                "Departure time must be within the next 30 minutes.\n"
+                "Please choose a time today that is no more than 30 minutes from now."
+            )
+            return
 
         min_driver_rating = float(self.min_driver_rating_combo.currentData() or 0.0)
+
 
         payload = {
             "area": area,
