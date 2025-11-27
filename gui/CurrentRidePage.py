@@ -1,13 +1,4 @@
-import sys
-import traceback
-import json
-import re
-import socket
-import uuid
-import threading
-import logging
 import html
-from client.map_selector import MapSelector
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFormLayout,
@@ -15,7 +6,7 @@ from PyQt5.QtWidgets import (
     QHeaderView, QTimeEdit, QDateTimeEdit, QTextEdit, QDialog, QSpinBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTimer, QObject
-from PyQt5.QtGui import QTextCursor, QPixmap
+from PyQt5.QtGui import QTextCursor
 
 
 
@@ -58,8 +49,15 @@ class CurrentRidePage(QWidget):
 
         self.send_btn.clicked.connect(self.on_send_clicked)
 
+
+
     # ===== Chat bubbles =====
     def append_bubble(self, text: str, outgoing: bool, timestamp=None):
+        """
+          - outgoing: right, green bubble
+          - incoming: left, light/grey bubble
+          Colors adapt to dark vs light theme via MainWindow.is_dark_mode.
+        """
         if not text:
             return
 
@@ -69,40 +67,63 @@ class CurrentRidePage(QWidget):
         other_name = getattr(mw, "other_party_name", "Them") if mw else "Them"
         is_dark = getattr(mw, "is_dark_mode", True)
 
+        if is_dark:
+            # Dark theme (navy background)
+            out_bg = "#4f46e5"   
+            out_fg = "#ffffff"
+            out_border = "#4f46e5"
+
+            in_bg = "#111827"   
+            in_fg = "#e5e7eb"
+            in_border = "#111827"
+        else:
+            out_bg = "#E6E6E6"  
+            out_fg = "#111827"
+            out_border = "#E6E6E6"
+
+            in_bg = "#F6FFBF"
+            in_fg = "#111827"
+            in_border = "#F6FFBF"
+
         if outgoing:
             side = "right"
-            bg = "#4f46e5"
-            fg = "#ffffff"
+            bg = out_bg
+            fg = out_fg
+            border = out_border
+            # tail-ish radius: sharp on top-right
+            radius = "18px 4px 18px 18px"
             sender = "You"
         else:
             side = "left"
-            bg = "#e5e7eb" if not is_dark else "#1f2937"
-            fg = "#111827" if not is_dark else "#e5e7eb"
+            bg = in_bg
+            fg = in_fg
+            border = in_border
+            # tail-ish radius: sharp on top-left
+            radius = "4px 18px 18px 18px"
             sender = other_name
 
         if timestamp is None:
             timestamp = QDateTime.currentDateTime()
         ts = timestamp.toString("HH:mm")
 
+       
         html_blob = f"""
-        <div style="width:100%; text-align:{side}; margin:8px 0;">
+        <div style="width:100%; text-align:{side}; margin:4px 0;">
             <div style="
                 display:inline-block;
-                max-width:60%;
+                max-width:70%;
                 background:{bg};
                 color:{fg};
-                padding:10px 14px;
-                border-radius:18px;
+                padding:8px 12px;
+                border-radius:{radius};
+                border: 1px solid {border};
                 font-size:10pt;
                 line-height:1.4;
-                box-shadow:0px 2px 5px rgba(0,0,0,0.25);
                 word-wrap:break-word;
+                box-shadow:0 1px 2px rgba(0,0,0,0.18);
             ">
-                <div style="font-size:8pt; opacity:0.7; margin-bottom:4px;">
-                    {sender}
-                </div>
                 {safe}
-                <div style="font-size:8pt; text-align:right; opacity:0.6; margin-top:6px;">
+                <div style="font-size:8pt; text-align:right; opacity:0.6; margin-top:4px;">
                     {ts}
                 </div>
             </div>
@@ -112,6 +133,7 @@ class CurrentRidePage(QWidget):
         cursor = self.chat_box.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.insertHtml(html_blob)
+        
         cursor.insertHtml("<br/>")
         self.chat_box.setTextCursor(cursor)
         self.chat_box.ensureCursorVisible()
@@ -132,34 +154,3 @@ class CurrentRidePage(QWidget):
             self.chat_input.clear()
         else:
             QMessageBox.warning(self, "Send Failed", "Failed to send message.")
-
-    # ===== Load states =====
-    def load_for_driver(self, match_payload):
-        """
-        Called when driver receives a MATCH notification
-        """
-        p = match_payload.get("passenger_info", {}) or {}
-        passenger_name = p.get("name", "Passenger")
-        self.info_label.setText(f"Passenger matched!\nRiding with: {passenger_name}")
-        self.complete_btn.show()
-
-    def load_for_passenger(self, payload):
-        """
-        Called when passenger receives a MATCH notification
-        """
-        d = payload.get("driver_info", {}) or {}
-        name = d.get("name") or "Driver"
-
-        vehicle = d.get("vehicle") or {}
-        model = vehicle.get("model") or "Unknown"
-        color = vehicle.get("color") or "Unknown"
-        plate = vehicle.get("plate") or "Unknown"
-
-        self.info_label.setText(
-            f"Driver matched!\n"
-            f"Name: {name}\n"
-            f"Car: {model} ({color})\n"
-            f"Plate: {plate}"
-        )
-
-        self.complete_btn.hide()
