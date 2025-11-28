@@ -178,21 +178,21 @@ class RegisterForm(QWidget):
         rtype = resp.get("type")
         p = resp.get("payload", {})
 
-        rating = self.spin.value()
-        try:
-            self.session.request({
-                "type": "RIDE.RATE_REQ",
-                "id": str(uuid.uuid4()),
-                "payload": {
-                    "request_id": self.request_id,  # e.g. "req_7"
-                    "rating": rating,
-                },
-            })
-        except Exception as e:
-            QMessageBox.warning(self, "Rating failed", f"Could not send rating: {e}")
-            return
+        #rating = self.spin.value()
+        # try:
+        #     # self.session.request({
+        #     #     "type": "RIDE.RATE_REQ",
+        #     #     "id": str(uuid.uuid4()),
+        #     #     "payload": {
+        #     #         #"request_id": self.request_id,  # e.g. "req_7"
+        #     #         #"rating": rating,
+        #     #     },
+        #     # })
+        # except Exception as e:
+        #     QMessageBox.warning(self, "Rating failed", f"Could not send rating: {e}")
+        #     return
 
-        self.accept()
+        #self.accept()
 
         if rtype == "AUTH.REGISTER_RES":
             # success toast / message
